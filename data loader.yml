@@ -1,0 +1,55 @@
+services:
+  redis:
+    image: redis/redis-stack-server:latest
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:   
+      - copilot-net
+
+  data-loader:
+    build: .
+    image: copilot-data-loader-ocr-redis:local
+    container_name: data-loader
+    restart: unless-stopped
+
+    depends_on:
+      - redis
+
+    ports:
+      - "8082:8080"
+
+    volumes:
+      - ${DOCS_DIR}:/docs
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    
+    networks:
+      - copilot-net
+
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL}
+      SECRET_KEY: ${SECRET_KEY}
+      HASHED_ADMIN_PASSWORD: ${HASHED_ADMIN_PASSWORD}
+      MODEL_PLUGIN_ENTRY_POINT: ${MODEL_PLUGIN_ENTRY_POINT}
+      EMBEDDINGS_PLUGIN_ENTRY_POINT: ${EMBEDDINGS_PLUGIN_ENTRY_POINT}
+      MODEL_NAME: ${MODEL_NAME}
+      ACCESS_TOKEN_EXPIRE_DAYS: ${ACCESS_TOKEN_EXPIRE_DAYS}
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME}
+      VECTORDB_PLUGIN_ENTRY_POINT: ${VECTORDB_PLUGIN_ENTRY_POINT}
+
+
+      # Ollama
+      OLLAMA_BASE_URL: "http://host.docker.internal:11434" # data loader 컨테이너가 LLM, Embedding 위해 Ollama 서버에 HTTP API로 요청을 보내야 하는데, 이때 주소
+      # 컨테이너에서 호스트PC 11434 포트로 접근해야하므로 host.docker.internal 사용
+
+      # VectorDB
+      REDIS_URL: redis://redis:6379/0
+
+      # Optional monitoring
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY}
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2}
+      LANGCHAIN_ENDPOINT: ${LANGCHAIN_ENDPOINT}
+      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT}

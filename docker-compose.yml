@@ -1,0 +1,75 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: copilot-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  data-loader:
+    build:
+      context: .
+      target: final
+    image: copilot-data-loader-ocr-redis:local
+    container_name: copilot-data-loader
+    restart: unless-stopped
+    depends_on:
+      - redis
+    ports:
+      - "8082:8080"
+    volumes:
+      # 컨테이너 내부는 /docs 로 마운트 (문서 기준) :contentReference[oaicite:1]{index=1}
+      - "${DOCS_DIR}:/docs"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      PYTHONPATH: /app/plugins
+      LOG_LEVEL: ${LOG_LEVEL}
+      SECRET_KEY: ${SECRET_KEY}
+      HASHED_ADMIN_PASSWORD: ${HASHED_ADMIN_PASSWORD}
+      ACCESS_TOKEN_EXPIRE_DAYS: "7"
+
+      #VECTORDB_PLUGIN_ENTRY_POINT: vectordb_plugin.chroma:ChromaVectorDB
+      #MODEL_PLUGIN_ENTRY_POINT: model_plugin.ollama:OllamaModel
+      #EMBEDDINGS_PLUGIN_ENTRY_POINT: embeddings_plugin.ollama:OllamaEmbeddings
+      VECTORDB_PLUGIN_ENTRY_POINT: ${VECTORDB_PLUGIN_ENTRY_POINT}
+      MODEL_PLUGIN_ENTRY_POINT: plugins.models.ollama:OllamaPlugin
+      EMBEDDINGS_PLUGIN_ENTRY_POINT: plugins.embeddings.ollama:OllamaEmbeddingsPlugin
+
+
+
+      MODEL_NAME: ${MODEL_NAME}
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME}
+
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+      REDIS_URL: ${REDIS_URL}   
+
+  orchestrator:
+    image: public.ecr.aws/tds/llm-orchestrator:latest
+    container_name: copilot-orchestrator
+    restart: unless-stopped
+    depends_on:
+      - redis
+    ports:
+      - "8081:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL}
+      SECRET_KEY: ${SECRET_KEY}
+      HASHED_ADMIN_PASSWORD: ${HASHED_ADMIN_PASSWORD}
+      ACCESS_TOKEN_EXPIRE_DAYS: ${ACCESS_TOKEN_EXPIRE_DAYS}
+
+      RETRIEVER_PLUGIN_ENTRY_POINT: ${RETRIEVER_PLUGIN_ENTRY_POINT}
+      MODEL_PLUGIN_ENTRY_POINT: ${MODEL_PLUGIN_ENTRY_POINT}
+      SECONDARY_MODEL_PLUGIN_ENTRY_POINT: ${SECONDARY_MODEL_PLUGIN_ENTRY_POINT}
+      EMBEDDINGS_PLUGIN_ENTRY_POINT: ${EMBEDDINGS_PLUGIN_ENTRY_POINT}
+
+      MULTI_MODAL_MODEL_NAME: ${MULTI_MODAL_MODEL_NAME}
+      COMPLETIONS_MODEL_NAME: ${COMPLETIONS_MODEL_NAME}
+      CHAT_SIMPLE_MODEL_NAME: ${CHAT_SIMPLE_MODEL_NAME}
+      CHAT_COMPLEX_MODEL_NAME: ${CHAT_COMPLEX_MODEL_NAME}
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME}
+
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+      REDIS_URL: ${REDIS_URL}

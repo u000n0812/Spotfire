@@ -1,0 +1,54 @@
+services:
+  # orchestrator 컨테이너 생성
+  orchestrator:
+    image: public.ecr.aws/tds/llm-orchestrator:latest # 실행할 docker image (AWS Public ECR, latest 사용?)
+    container_name: orchestrator
+    restart: unless-stopped
+    ports:
+      - "8081:8080"  # 호스트에서 8081로 열어서 data loader 8080과 충돌 방지. 컨테이너 안 orchestrator는 보통 8080에서 API/UI를 열어둠. 즉, 브라우저/클라이언트가 8081로 접속하면 실제요청은 컨테이너 내부 8080으로 들어감
+    volumes:
+      # AWS 안 쓰면 아래 줄 삭제 가능
+      # Orchestrator가 AWS S3, Bedrock, 기타 AWS 리소스를 사용해야하면 컨테이너 안에서 AWS 자격증명을 읽어야함. 이때 아래 코드 수행
+      # - ${AWS_CONFIG_DIR}:/home/spotuser/.aws # 호스트 PC의 AWS 설정 폴더를 /home/spotuser/.aws로 붙임
+    extra_hosts: # 컨테이너에서 host.docker.internal이라는 이름이 호스트PC를 가리키도록 설정
+      - "host.docker.internal:host-gateway"
+    environment: # .env값을 orchestrator에 전달
+      LOG_LEVEL: ${LOG_LEVEL} # 로그 출력량 제어
+      SECRET_KEY: ${SECRET_KEY}
+      HASHED_ADMIN_PASSWORD: ${HASHED_ADMIN_PASSWORD}
+      ACCESS_TOKEN_EXPIRE_DAYS: ${ACCESS_TOKEN_EXPIRE_DAYS}
+
+      # plugins
+      # orchestrator는 질문을 받으면 문서에서 관련 내용을 찾고 LLM으로 답을 생성하는데, 이때 내부 플러그인을 설정
+      RETRIEVER_PLUGIN_ENTRY_POINT: ${RETRIEVER_PLUGIN_ENTRY_POINT} # 문서 검색
+      MODEL_PLUGIN_ENTRY_POINT: ${MODEL_PLUGIN_ENTRY_POINT} # 기본 LLM 호출
+      SECONDARY_MODEL_PLUGIN_ENTRY_POINT: ${SECONDARY_MODEL_PLUGIN_ENTRY_POINT} # 보조 모델
+      EMBEDDINGS_PLUGIN_ENTRY_POINT: ${EMBEDDINGS_PLUGIN_ENTRY_POINT} # 질의를 벡터로 만드는 Embedding
+
+      # models
+      # 어떤 작업에 어떤 모델을 쓸지
+      MULTI_MODAL_MODEL_NAME: ${MULTI_MODAL_MODEL_NAME}
+      COMPLETIONS_MODEL_NAME: ${COMPLETIONS_MODEL_NAME}
+      CHAT_SIMPLE_MODEL_NAME: ${CHAT_SIMPLE_MODEL_NAME}
+      CHAT_COMPLEX_MODEL_NAME: ${CHAT_COMPLEX_MODEL_NAME}
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME}
+
+      # Ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+
+      # Redis
+      REDIS_URL: ${REDIS_URL}
+
+      # Optional monitoring
+      # LangChain 기반 트레이싱/모니터링(보통 LangSmith)을 켜는 설정. 안쓰면 .env에서 비워두거나 LANGCHAIN_TRAICING_V2=false로 두면 됨
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY}
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2}
+      LANGCHAIN_ENDPOINT: ${LANGCHAIN_ENDPOINT}
+      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT}
+    networks: # Orchestrator를 특정 network에 연결: 같은 네트워크에 붙은 서비스끼리는 서비스명으로 DNS 통신이 가능(copilot-net에 redis 서비스가 있으면 orchestrator는 redis로 접근 가능)
+      - copilot-net 
+
+# network 생성
+networks:
+  copilot-net:
+    name: copilot-net
