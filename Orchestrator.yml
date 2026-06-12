@@ -6,10 +6,10 @@ services:
     restart: unless-stopped
     ports:
       - "8081:8080"  # 호스트에서 8081로 열어서 data loader 8080과 충돌 방지. 컨테이너 안 orchestrator는 보통 8080에서 API/UI를 열어둠. 즉, 브라우저/클라이언트가 8081로 접속하면 실제요청은 컨테이너 내부 8080으로 들어감
-    volumes:
-      # AWS 안 쓰면 아래 줄 삭제 가능
-      # Orchestrator가 AWS S3, Bedrock, 기타 AWS 리소스를 사용해야하면 컨테이너 안에서 AWS 자격증명을 읽어야함. 이때 아래 코드 수행
-      # - ${AWS_CONFIG_DIR}:/home/spotuser/.aws # 호스트 PC의 AWS 설정 폴더를 /home/spotuser/.aws로 붙임
+    # AWS 안 쓰면 volumes 블록 전체를 주석 처리해야 함 (항목 없이 volumes: 키만 남으면 "must be a array" 오류 발생)
+    # Orchestrator가 AWS S3, Bedrock, 기타 AWS 리소스를 사용해야하면 컨테이너 안에서 AWS 자격증명을 읽어야함. 이때 아래 코드 수행
+    # volumes:
+    #   - ${AWS_CONFIG_DIR}:/home/spotuser/.aws # 호스트 PC의 AWS 설정 폴더를 /home/spotuser/.aws로 붙임
     extra_hosts: # 컨테이너에서 host.docker.internal이라는 이름이 호스트PC를 가리키도록 설정
       - "host.docker.internal:host-gateway"
     environment: # .env값을 orchestrator에 전달
@@ -48,7 +48,10 @@ services:
     networks: # Orchestrator를 특정 network에 연결: 같은 네트워크에 붙은 서비스끼리는 서비스명으로 DNS 통신이 가능(copilot-net에 redis 서비스가 있으면 orchestrator는 redis로 접근 가능)
       - copilot-net 
 
-# network 생성
+# network 참조
+# data loader.yml 스택이 먼저 copilot-net을 생성하므로 여기서는 external로 참조
+# (external 없이 두 스택이 같은 이름의 네트워크를 각자 만들려고 하면 충돌 오류 발생)
 networks:
   copilot-net:
     name: copilot-net
+    external: true
