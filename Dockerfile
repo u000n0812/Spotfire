@@ -20,3 +20,7 @@ RUN python -m pip install --no-cache-dir \
 # 이미지에 내장된 Redis 플러그인은 getVectorDB 미구현(데이터 로더에서 사용 불가)
 # → getVectorDB 를 구현한 패치 파일로 교체 (파일 상단 주석 참고)
 COPY redis_vectordb_plugin.py /app/plugins/vectordbs/redis.py
+
+# 사내망 SSL 검사 환경에서 hi_res 모델(HuggingFace)/NLTK 데이터 다운로드가
+# CERTIFICATE_VERIFY_FAILED 로 실패하는 것을 회피 (파일 상단 주석 참고)
+COPY sitecustomize_ssl_bypass.py /usr/lib/python3.11/site-packages/sitecustomize.py
