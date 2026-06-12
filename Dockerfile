@@ -4,7 +4,14 @@
 FROM public.ecr.aws/tds/data-loader-pdf-unstruct:latest
 
 USER root
-# 시스템 파이썬이 externally-managed 인 경우를 대비해 --break-system-packages 로 폴백
-RUN python -m pip install --no-cache-dir redis \
-    || python -m pip install --no-cache-dir --break-system-packages redis
+# --trusted-host: 사내망 SSL 검사(self-signed 인증서) 환경에서 pip 인증서 오류 회피
+# --break-system-packages 폴백: 시스템 파이썬이 externally-managed 인 경우 대비
+RUN python -m pip install --no-cache-dir \
+        --trusted-host pypi.org \
+        --trusted-host files.pythonhosted.org \
+        redis \
+    || python -m pip install --no-cache-dir --break-system-packages \
+        --trusted-host pypi.org \
+        --trusted-host files.pythonhosted.org \
+        redis
 USER spotuser
