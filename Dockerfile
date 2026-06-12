@@ -21,6 +21,11 @@ RUN python -m pip install --no-cache-dir \
 # → getVectorDB 를 구현한 패치 파일로 교체 (파일 상단 주석 참고)
 COPY redis_vectordb_plugin.py /app/plugins/vectordbs/redis.py
 
+# 이미지에 내장된 Ollama embeddings 플러그인이 OLLAMA_BASE_URL /
+# EMBEDDING_MODEL_NAME 환경변수를 무시하고 localhost 기본값을 사용
+# → 환경변수를 읽도록 수정한 패치 파일로 교체 (파일 상단 주석 참고)
+COPY ollama_embeddings_plugin.py /app/plugins/embeddings/ollama.py
+
 # 사내망 SSL 검사 환경에서 hi_res 모델(HuggingFace)/NLTK 데이터 다운로드가
 # CERTIFICATE_VERIFY_FAILED 로 실패하는 것을 회피 (파일 상단 주석 참고)
 COPY sitecustomize_ssl_bypass.py /usr/lib/python3.11/site-packages/sitecustomize.py
