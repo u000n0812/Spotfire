@@ -9,8 +9,10 @@ services:
       - copilot-net
 
   data-loader:
-    # Dockerfile이 없으므로 build 대신 공식 Advanced(OCR) Data Loader 이미지 사용 (PDF Appendix 참고)
-    image: public.ecr.aws/tds/data-loader-pdf-unstruct:latest
+    # 공식 unstruct 이미지에 redis 라이브러리를 추가한 커스텀 이미지 (Dockerfile 참고)
+    # 실행: docker compose -f "data loader.yml" up -d --build
+    build: .
+    image: copilot-data-loader-ocr-redis:local
     container_name: data-loader
     restart: unless-stopped
 
