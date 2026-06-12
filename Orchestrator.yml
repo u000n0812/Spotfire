@@ -42,8 +42,9 @@ services:
       # Optional monitoring
       # LangChain 기반 트레이싱/모니터링(보통 LangSmith)을 켜는 설정. 안쓰면 .env에서 비워두거나 LANGCHAIN_TRAICING_V2=false로 두면 됨
       LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY}
-      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2}
-      LANGCHAIN_ENDPOINT: ${LANGCHAIN_ENDPOINT}
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-false}
+      # 빈 값이면 "LangSmith API URL cannot be empty" 오류 발생 → 기본 URL 지정
+      LANGCHAIN_ENDPOINT: ${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
       LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT}
     networks: # Orchestrator를 특정 network에 연결: 같은 네트워크에 붙은 서비스끼리는 서비스명으로 DNS 통신이 가능(copilot-net에 redis 서비스가 있으면 orchestrator는 redis로 접근 가능)
       - copilot-net 

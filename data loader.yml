@@ -49,8 +49,9 @@ services:
 
       # Optional monitoring
       LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY}
-      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2}
-      LANGCHAIN_ENDPOINT: ${LANGCHAIN_ENDPOINT}
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-false}
+      # 빈 값이면 "LangSmith API URL cannot be empty" 오류 발생 → 기본 URL 지정
+      LANGCHAIN_ENDPOINT: ${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
       LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT}
 
 # 서비스에서 참조하는 copilot-net 네트워크 정의 (없으면 "undefined network" 오류 발생)

@@ -84,9 +84,10 @@ services:
       REDIS_URL: ${REDIS_URL}
 
       # Optional monitoring (Langsmith)
+      # 빈 값이 들어가면 "LangSmith API URL cannot be empty" 오류로 컨테이너가 죽으므로 기본 URL 지정
       LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY}
-      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2}
-      LANGCHAIN_ENDPOINT: ${LANGCHAIN_ENDPOINT}
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-false}
+      LANGCHAIN_ENDPOINT: ${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
       LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT}
 
 networks:
