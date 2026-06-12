@@ -24,3 +24,9 @@ COPY redis_vectordb_plugin.py /app/plugins/vectordbs/redis.py
 # 사내망 SSL 검사 환경에서 hi_res 모델(HuggingFace)/NLTK 데이터 다운로드가
 # CERTIFICATE_VERIFY_FAILED 로 실패하는 것을 회피 (파일 상단 주석 참고)
 COPY sitecustomize_ssl_bypass.py /usr/lib/python3.11/site-packages/sitecustomize.py
+
+# unstructured 가 런타임에 NLTK 데이터를 받는 URL 이 사내 프록시에서 403 으로
+# 차단됨 → 빌드 시 NLTK 공식 소스(github)에서 미리 받아 이미지에 포함.
+# 패키지가 미리 있으면 unstructured 는 런타임 다운로드를 건너뜀.
+ENV NLTK_DATA=/usr/share/nltk_data
+RUN python -c "import nltk; [nltk.download(p, download_dir='/usr/share/nltk_data') for p in ['punkt', 'punkt_tab', 'averaged_perceptron_tagger', 'averaged_perceptron_tagger_eng']]"
