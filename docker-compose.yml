@@ -6,6 +6,9 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+    volumes:
+      # 적재한 벡터 데이터를 보존 (없으면 docker compose down 시 데이터 소실)
+      - redis-data:/data
     networks:
       - copilot-net
 
@@ -95,3 +98,6 @@ services:
 networks:
   copilot-net:
     name: copilot-net
+
+volumes:
+  redis-data:
