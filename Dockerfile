@@ -16,3 +16,7 @@ RUN python -m pip install --no-cache-dir \
         --trusted-host pypi.org \
         --trusted-host files.pythonhosted.org \
         "redis==5.0.8"
+
+# 이미지에 내장된 Redis 플러그인은 getVectorDB 미구현(데이터 로더에서 사용 불가)
+# → getVectorDB 를 구현한 패치 파일로 교체 (파일 상단 주석 참고)
+COPY redis_vectordb_plugin.py /app/plugins/vectordbs/redis.py
