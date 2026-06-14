@@ -63,6 +63,11 @@ services:
       - "host.docker.internal:host-gateway"
     networks:
       - copilot-net
+    volumes:
+      # orchestrator 이미지의 임베딩 플러그인은 OLLAMA_BASE_URL/EMBEDDING_MODEL_NAME 을
+      # 무시하는 원본이라, 질문 벡터가 data loader 가 저장한 문서 벡터와 안 맞아 검색이 0건이 됨.
+      # data loader 와 동일한 패치 파일로 덮어써서 같은 임베딩(nomic-embed-text)을 쓰게 함.
+      - "./ollama_embeddings_plugin.py:/app/plugins/embeddings/ollama.py:ro"
     environment:
       LOG_LEVEL: ${LOG_LEVEL}
       SECRET_KEY: ${SECRET_KEY}
