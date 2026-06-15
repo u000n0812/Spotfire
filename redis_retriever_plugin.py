@@ -23,12 +23,14 @@ class RedisRetrieverPlugin:
     def getRetriever(self, type: str, index_name: str,
                      search_type: str, search_threshold: float, search_top_k: int,
                      embeddings: Any, model: Any) -> Any:
-        vector_db = RedisVectorDB(
-            redis_url=os.environ.get("REDIS_URL"),
+        # 기존 인덱스 검색에는 생성자 Redis(...) 가 아니라 from_existing_index 를 써야
+        # 실제로 데이터가 조회됨(생성자는 빈 결과 반환). 진단 테스트로 확인됨.
+        vector_db = RedisVectorDB.from_existing_index(
+            embeddings,
             index_name=index_name,
+            redis_url=os.environ.get("REDIS_URL"),
+            schema=INDEX_SCHEMA,
             key_prefix="summary",
-            index_schema=INDEX_SCHEMA,
-            embedding=embeddings,
         )
 
         # 벡터 store 자체를 retriever 로 사용 (검색된 문서를 그대로 반환)
