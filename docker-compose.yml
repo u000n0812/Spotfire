@@ -71,6 +71,8 @@ services:
       # 원본 검색기는 MultiVectorRetriever(doc_id 기반 2단계)라 우리 저장 방식과 안 맞아
       # 항상 0건 반환 → 단순 벡터 검색기로 교체
       - "./redis_retriever_plugin.py:/app/plugins/retrievers/redis.py:ro"
+      # data loader 와 동일한 스키마(source/page 포함)를 써야 검색 시 출처가 실림
+      - "./redis_schema.yml:/app/plugins/retrievers/schema.yml:ro"
     environment:
       LOG_LEVEL: ${LOG_LEVEL}
       SECRET_KEY: ${SECRET_KEY}

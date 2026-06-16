@@ -21,6 +21,9 @@ RUN python -m pip install --no-cache-dir \
 # → getVectorDB 를 구현한 패치 파일로 교체 (파일 상단 주석 참고)
 COPY redis_vectordb_plugin.py /app/plugins/vectordbs/redis.py
 
+# source/page 를 메타데이터로 추가한 인덱스 스키마로 교체 (sources 채워지도록)
+COPY redis_schema.yml /app/plugins/vectordbs/schema.yml
+
 # 이미지에 내장된 Ollama embeddings 플러그인이 OLLAMA_BASE_URL /
 # EMBEDDING_MODEL_NAME 환경변수를 무시하고 localhost 기본값을 사용
 # → 환경변수를 읽도록 수정한 패치 파일로 교체 (파일 상단 주석 참고)

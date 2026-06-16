@@ -1,0 +1,20 @@
+# Redis 인덱스 스키마 (data loader 저장 / orchestrator 검색 공용)
+#
+# 원본 스키마는 content, doc_id 만 메타데이터로 선언해서, 검색 시
+# source(파일명)/page(페이지)가 Document.metadata 에 안 실리고 → 응답의
+# sources 가 항상 비었음. source/page 를 메타데이터 필드로 추가해 해결.
+#
+# 벡터 dims 는 langchain 이 실제 임베딩 모델 출력 차원으로 자동 덮어쓰므로
+# (nomic=768, bge-m3=1024) 여기 값은 참고용. 모델을 바꿔도 재적재만 하면 됨.
+text:
+- name: content
+- name: source
+- name: page
+tag:
+- name: doc_id
+vector:
+- name: content_vector
+  algorithm: FLAT
+  datatype: FLOAT32
+  dims: 1024
+  distance_metric: COSINE

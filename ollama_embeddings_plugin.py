@@ -21,8 +21,9 @@ import os
 
 from langchain_community.embeddings import OllamaEmbeddings
 
-# 1500자 * 최악 4토큰/자 = 6000토큰 < 8192, 안전 여유 확보
-MAX_EMBED_CHARS = 1500
+# bge-m3 는 다국어 토크나이저라 한국어를 효율적으로 처리(글자당 토큰 적음).
+# 청크 최대 4000자도 8192 컨텍스트에 들어가므로 절단을 거의 안 하도록 3500 으로.
+MAX_EMBED_CHARS = 3500
 
 
 class _TruncatingOllamaEmbeddings(OllamaEmbeddings):
