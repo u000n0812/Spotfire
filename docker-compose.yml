@@ -76,6 +76,8 @@ services:
       # 원본 main.py 는 응답의 sources 를 항상 빈 채로 반환 → 검색 문서로 sources 를
       # 채우도록 패치한 main.py 로 교체 (파일 상단 주석 참고)
       - "./orchestrator_main.py:/app/main.py:ro"
+      # 채팅 모델 num_ctx 미지정(기본 2048)으로 문맥 초과 시 출력이 깨짐 → num_ctx 상향 패치
+      - "./ollama_model_plugin.py:/app/plugins/models/ollama.py:ro"
     environment:
       LOG_LEVEL: ${LOG_LEVEL}
       SECRET_KEY: ${SECRET_KEY}
