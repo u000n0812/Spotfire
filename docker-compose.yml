@@ -73,6 +73,9 @@ services:
       - "./redis_retriever_plugin.py:/app/plugins/retrievers/redis.py:ro"
       # data loader 와 동일한 스키마(source/page 포함)를 써야 검색 시 출처가 실림
       - "./redis_schema.yml:/app/plugins/retrievers/schema.yml:ro"
+      # 원본 main.py 는 응답의 sources 를 항상 빈 채로 반환 → 검색 문서로 sources 를
+      # 채우도록 패치한 main.py 로 교체 (파일 상단 주석 참고)
+      - "./orchestrator_main.py:/app/main.py:ro"
     environment:
       LOG_LEVEL: ${LOG_LEVEL}
       SECRET_KEY: ${SECRET_KEY}
