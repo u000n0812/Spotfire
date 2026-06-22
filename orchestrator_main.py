@@ -358,6 +358,48 @@ def handle_request(
     print("Orchestrator config: ")
     print(orch_config)
 
+    # --- PATCH: Spotfire 의 인텐트 분류 요청을 깔끔한 intent 라벨로 응답 ---
+    # Spotfire 는 "Classify this question: ..." 를 보내고 응답이 정해진 intent 라벨이길
+    # 기대하는데, 로컬 LLM 이 자유형식으로 답해 "Error determining intent" 가 났음.
+    # 유효 intent 중 하나만 출력하도록 강제해 분류 단계를 통과시킴.
+    _cls_prompt = (orch_config.user_prompt or "").strip()
+    if _cls_prompt.lower().startswith("classify this question"):
+        _question = _cls_prompt.split(":", 1)[-1].strip() if ":" in _cls_prompt else _cls_prompt
+        _valid_intents = [
+            "SpecificDataQuestion", "CreateVisualization", "ExplainVisualization",
+            "InterpretPageData", "DataStructure", "HowTo",
+        ]
+        try:
+            from langchain_community.chat_models import ChatOllama
+            _cls_model = ChatOllama(
+                base_url=os.environ.get("OLLAMA_BASE_URL"),
+                model=os.getenv("CHAT_SIMPLE_MODEL_NAME") or "qwen2.5",
+                temperature=0,
+                num_ctx=int(os.getenv("CHAT_NUM_CTX", "8192")),
+            )
+            _instr = (
+                "You are an intent classifier for Spotfire Copilot. Read the user's "
+                "question and reply with EXACTLY ONE of the following intent names and "
+                "nothing else (no explanation, no punctuation, no quotes):\n"
+                + ", ".join(_valid_intents)
+                + "\n\nGuidance: questions about the values or rows in the loaded data "
+                "table (a specific patient/subject, a site, a count, a filter, a lookup) "
+                "are 'SpecificDataQuestion'.\n\n"
+                "Question: " + _question + "\nIntent:"
+            )
+            _resp = _cls_model.invoke(_instr)
+            _txt = getattr(_resp, "content", str(_resp))
+            _chosen = next(
+                (v for v in _valid_intents if v.lower() in _txt.lower()),
+                "SpecificDataQuestion",
+            )
+        except Exception as _e:
+            logger.warning("Classification patch failed: %s", _e)
+            _chosen = "SpecificDataQuestion"
+        logger.info("Classified question '%s' as intent: %s", _question, _chosen)
+        return {"result": _chosen, "gpt_prompt": "", "sources": []}
+    # --- END PATCH ---
+
     # --- PATCH: 분류기/Spotfire 가 prompt_dict 에 없는 intent 를 보내면 원본은
     # KeyError 로 500 이 났음 → 기본값을 등록해 크래시 방지(buildSystemPrompt 도 통과). ---
     if orch_config.user_intent not in prompts.prompt_dict:
