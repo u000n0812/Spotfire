@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query, Depends, status
+from fastapi import FastAPI, HTTPException, Query, Depends, status, Form
 from fastapi.security import OAuth2PasswordRequestForm
 from typing import Annotated
 import uvicorn
@@ -251,6 +251,53 @@ async def login_for_access_token(
         data={"sub": user.username}, expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+# --- PATCH: OAuth2 client-credentials token endpoint ---
+# Spotfire Copilot 프론트엔드는 /client/token 으로 client_id/client_secret 을 보내
+# 토큰을 받는데, 이 orchestrator 이미지엔 해당 엔드포인트가 없어 404 가 났음.
+# (Spotfire 패널의 "Error communicating with orchestrator / 404" 원인)
+# client_id/client_secret 을 검증하고 admin 권한 토큰을 발급해 보완함.
+# 유효 값은 환경변수 COPILOT_CLIENT_ID / COPILOT_CLIENT_SECRET (기본 spotfire/spotfire).
+@app.post("/client/token", response_model=authentication.Token)
+async def client_for_access_token(
+    grant_type: str = Form(default=None),
+    client_id: str = Form(...),
+    client_secret: str = Form(...),
+    scope: str = Form(default=None),
+):
+    expected_id = os.getenv("COPILOT_CLIENT_ID", "spotfire")
+    expected_secret = os.getenv("COPILOT_CLIENT_SECRET", "spotfire")
+    if client_id != expected_id or client_secret != expected_secret:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid client credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = authentication.timedelta(
+        days=int(os.getenv("ACCESS_TOKEN_EXPIRE_DAYS"))
+    )
+    # admin 을 subject 로 발급해야 이후 보호된 엔드포인트의 사용자 조회를 통과함
+    access_token = authentication.create_access_token(
+        data={"sub": "admin"}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+# Spotfire 가 client 등록을 호출하는 경우를 대비한 보조 엔드포인트.
+# 설정된 자격증명을 그대로 돌려줌(Spotfire 는 보통 Preferences 의 값을 직접 사용).
+@app.post("/register-client")
+async def register_client(
+    current_user: Annotated[
+        authentication.User, Depends(authentication.get_current_active_user)
+    ],
+):
+    return {
+        "client_id": os.getenv("COPILOT_CLIENT_ID", "spotfire"),
+        "client_secret": os.getenv("COPILOT_CLIENT_SECRET", "spotfire"),
+        "token_endpoint": "/client/token",
+    }
+# --- END PATCH ---
 
 
 @app.get("/")
