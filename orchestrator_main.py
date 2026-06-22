@@ -27,6 +27,26 @@ logger = logging.getLogger("orchestrator")
 logger.setLevel(LOG_LEVEL)
 
 
+# --- PATCH: Spotfire 문서 Q&A(User_Docs)를 우리 RAG 체인에 맞게 보정 ---
+# 원본 User_Docs 프롬프트는 ${context}(string.Template 문법)을 쓰는데, 체인은
+# {context}(LangChain PromptTemplate)을 기대 → 문맥이 주입되지 않음.
+# Spotfire 가 system_prompt 없이 User_Docs 로 질의할 때도 검색 문맥이 들어가도록
+# {context} 기반 한국어 프롬프트로 교체.
+try:
+    if "User_Docs" in prompts.prompt_dict:
+        prompts.prompt_dict["User_Docs"]["system_prompt"] = (
+            "당신은 문서 기반 한국어 비서입니다. 아래 문맥(context)에 있는 내용만 "
+            "근거로 한국어로만 답하세요. 한자나 중국어를 쓰지 마세요. 문맥에 답이 "
+            "없으면 '문서에서 찾을 수 없습니다'라고만 답하세요.\n\n문맥:\n{context}"
+        )
+        prompts.prompt_dict["User_Docs"]["system_prompt_parameters"] = None
+        prompts.prompt_dict["User_Docs"]["retriever_type"] = "similarity"
+        prompts.prompt_dict["Agent_User_Docs"] = prompts.prompt_dict["User_Docs"]
+except Exception as _e:
+    logger.warning("Failed to adjust User_Docs prompt: %s", _e)
+# --- END PATCH ---
+
+
 class HistoryMsg(BaseModel):
     role: str
     content: str
@@ -337,6 +357,32 @@ def handle_request(
 
     print("Orchestrator config: ")
     print(orch_config)
+
+    # --- PATCH: 분류기/Spotfire 가 prompt_dict 에 없는 intent 를 보내면 원본은
+    # KeyError 로 500 이 났음 → 기본값을 등록해 크래시 방지(buildSystemPrompt 도 통과). ---
+    if orch_config.user_intent not in prompts.prompt_dict:
+        logger.warning(
+            "Unregistered user_intent '%s' — registering a default entry",
+            orch_config.user_intent,
+        )
+        prompts.prompt_dict[orch_config.user_intent] = {
+            "system_prompt": orch_config.system_prompt
+            or "당신은 Spotfire 도우미입니다. 한국어로 간결하게 답하세요.",
+            "system_prompt_parameters": None,
+            "use_secondary_model_plugin": False,
+            "llm_name": orch_config.llm_name
+            or os.getenv("CHAT_COMPLEX_MODEL_NAME")
+            or "qwen2.5",
+            "llm_mode": orch_config.llm_mode or "chat",
+            "temperature": orch_config.temperature
+            if orch_config.temperature is not None
+            else 0.2,
+            "index_name": orch_config.index_name,
+            "index_score_threshold": orch_config.index_score_threshold,
+            "index_topk": orch_config.index_topk,
+            "retriever_type": orch_config.retriever_type,
+        }
+    # --- END PATCH ---
 
     # Get system prompt information for user_intent
     system_prompt_info = prompts.prompt_dict[orch_config.user_intent]
