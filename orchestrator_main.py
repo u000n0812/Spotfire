@@ -362,13 +362,23 @@ def handle_request(
     # Spotfire 는 "Classify this question: ..." 를 보내고 응답이 정해진 intent 라벨이길
     # 기대하는데, 로컬 LLM 이 자유형식으로 답해 "Error determining intent" 가 났음.
     # 유효 intent 중 하나만 출력하도록 강제해 분류 단계를 통과시킴.
+    #
+    # 라벨은 반드시 prompts.prompt_dict 에 등록된 이름(언더스코어 형식)과 정확히
+    # 일치해야 함. 예전엔 "SpecificDataQuestion" 처럼 언더스코어 없는 이름을 썼는데
+    # 등록명은 "Specific_Data_Question" 이라, 데이터 질문마다 Analyst 가
+    # "Error determining intent" 로 거부했음.
+    #
+    # 매칭 시 긴 이름이 먼저 걸리도록 정렬해서 "Specific_Data_Question" 이
+    # "Specific_Data_Question_With_DataView" 를 가로채지 않게 함.
     _cls_prompt = (orch_config.user_prompt or "").strip()
     if _cls_prompt.lower().startswith("classify this question"):
         _question = _cls_prompt.split(":", 1)[-1].strip() if ":" in _cls_prompt else _cls_prompt
         _valid_intents = [
-            "SpecificDataQuestion", "CreateVisualization", "ExplainVisualization",
+            "Specific_Data_Question", "Create_Visualization", "Explain_Visualization",
+            "Modify_Visualization", "Interpret_Visual_Data", "Create_Data_Function",
             "InterpretPageData", "DataStructure", "HowTo",
         ]
+        _default_intent = "Specific_Data_Question"
         try:
             from langchain_community.chat_models import ChatOllama
             _cls_model = ChatOllama(
@@ -384,18 +394,22 @@ def handle_request(
                 + ", ".join(_valid_intents)
                 + "\n\nGuidance: questions about the values or rows in the loaded data "
                 "table (a specific patient/subject, a site, a count, a filter, a lookup) "
-                "are 'SpecificDataQuestion'.\n\n"
+                "are '" + _default_intent + "'.\n\n"
                 "Question: " + _question + "\nIntent:"
             )
             _resp = _cls_model.invoke(_instr)
             _txt = getattr(_resp, "content", str(_resp))
             _chosen = next(
-                (v for v in _valid_intents if v.lower() in _txt.lower()),
-                "SpecificDataQuestion",
+                (
+                    v
+                    for v in sorted(_valid_intents, key=len, reverse=True)
+                    if v.lower() in _txt.lower()
+                ),
+                _default_intent,
             )
         except Exception as _e:
             logger.warning("Classification patch failed: %s", _e)
-            _chosen = "SpecificDataQuestion"
+            _chosen = _default_intent
         logger.info("Classified question '%s' as intent: %s", _question, _chosen)
         return {"result": _chosen, "gpt_prompt": "", "sources": []}
     # --- END PATCH ---
