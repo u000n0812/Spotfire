@@ -317,6 +317,14 @@ async def register_client(
         "client_secret": os.getenv("COPILOT_CLIENT_SECRET", "spotfire"),
         "token_endpoint": "/client/token",
     }
+
+
+# Spotfire 프론트엔드가 시작할 때마다 조회하는데 이 orchestrator
+# (FASTAPI_APP_VERSION=2.0.0) 에는 없어 404 가 반복 기록됨.
+# 에이전트 기능은 쓰지 않으므로 빈 목록을 돌려줘 프론트엔드가 기본 모드로 진행하게 함.
+@app.get("/agents/available")
+async def agents_available():
+    return []
 # --- END PATCH ---
 
 
@@ -358,59 +366,71 @@ def handle_request(
     print("Orchestrator config: ")
     print(orch_config)
 
-    # --- PATCH: Spotfire 의 인텐트 분류 요청을 깔끔한 intent 라벨로 응답 ---
-    # Spotfire 는 "Classify this question: ..." 를 보내고 응답이 정해진 intent 라벨이길
-    # 기대하는데, 로컬 LLM 이 자유형식으로 답해 "Error determining intent" 가 났음.
-    # 유효 intent 중 하나만 출력하도록 강제해 분류 단계를 통과시킴.
+    # --- PATCH: Spotfire 의 인텐트 분류 요청에 프론트엔드가 받는 라벨로 응답 ---
+    # Spotfire 는 "Classify this question: ..." 를 보내고, result 가 자기 쪽 인텐트
+    # 목록에 있는 이름이길 기대함. 아니면 "Error determining intent" 로 거부함.
     #
-    # 라벨은 반드시 prompts.prompt_dict 에 등록된 이름(언더스코어 형식)과 정확히
-    # 일치해야 함. 예전엔 "SpecificDataQuestion" 처럼 언더스코어 없는 이름을 썼는데
-    # 등록명은 "Specific_Data_Question" 이라, 데이터 질문마다 Analyst 가
-    # "Error determining intent" 로 거부했음.
+    # 이 목록은 백엔드의 prompts.prompt_dict 와 다름 — "SpecificDataQuestion" 도
+    # "Specific_Data_Question" 도 둘 다 거부당했음. 반면 이미지에 내장된 분류기
+    # (orchestrator-classifier)는 prompt_dict 에 없는 'GeneralHelp' 같은 라벨을
+    # 내놓는데, 이게 이 orchestrator 가 상정하는 정식 어휘임.
+    # → 자체 목록으로 찍지 말고 내장 분류기가 이미 결정한 라벨을 그대로 돌려줌.
+    #   (내장 분류기는 OrchestratorConfiguration() 생성 시 이미 실행됨)
     #
-    # 매칭 시 긴 이름이 먼저 걸리도록 정렬해서 "Specific_Data_Question" 이
-    # "Specific_Data_Question_With_DataView" 를 가로채지 않게 함.
+    # 프론트엔드가 쓰는 정확한 이름을 알아내면 코드 수정 없이 환경변수로 지정 가능:
+    #   COPILOT_INTENT_LABELS  = 쉼표로 구분한 유효 인텐트 목록 (지정 시 LLM 분류 사용)
+    #   COPILOT_INTENT_DEFAULT = 분류 실패 시 사용할 기본 라벨
     _cls_prompt = (orch_config.user_prompt or "").strip()
     if _cls_prompt.lower().startswith("classify this question"):
         _question = _cls_prompt.split(":", 1)[-1].strip() if ":" in _cls_prompt else _cls_prompt
+
+        _builtin_intent = (orch_config.user_intent or "").strip()
         _valid_intents = [
-            "Specific_Data_Question", "Create_Visualization", "Explain_Visualization",
-            "Modify_Visualization", "Interpret_Visual_Data", "Create_Data_Function",
-            "InterpretPageData", "DataStructure", "HowTo",
+            s.strip()
+            for s in os.getenv("COPILOT_INTENT_LABELS", "").split(",")
+            if s.strip()
         ]
-        _default_intent = "Specific_Data_Question"
-        try:
-            from langchain_community.chat_models import ChatOllama
-            _cls_model = ChatOllama(
-                base_url=os.environ.get("OLLAMA_BASE_URL"),
-                model=os.getenv("CHAT_SIMPLE_MODEL_NAME") or "qwen2.5",
-                temperature=0,
-                num_ctx=int(os.getenv("CHAT_NUM_CTX", "8192")),
-            )
-            _instr = (
-                "You are an intent classifier for Spotfire Copilot. Read the user's "
-                "question and reply with EXACTLY ONE of the following intent names and "
-                "nothing else (no explanation, no punctuation, no quotes):\n"
-                + ", ".join(_valid_intents)
-                + "\n\nGuidance: questions about the values or rows in the loaded data "
-                "table (a specific patient/subject, a site, a count, a filter, a lookup) "
-                "are '" + _default_intent + "'.\n\n"
-                "Question: " + _question + "\nIntent:"
-            )
-            _resp = _cls_model.invoke(_instr)
-            _txt = getattr(_resp, "content", str(_resp))
-            _chosen = next(
-                (
-                    v
-                    for v in sorted(_valid_intents, key=len, reverse=True)
-                    if v.lower() in _txt.lower()
-                ),
-                _default_intent,
-            )
-        except Exception as _e:
-            logger.warning("Classification patch failed: %s", _e)
-            _chosen = _default_intent
-        logger.info("Classified question '%s' as intent: %s", _question, _chosen)
+        _default_intent = os.getenv("COPILOT_INTENT_DEFAULT", "").strip()
+
+        if not _valid_intents:
+            # 목록 미지정(기본): 내장 분류기 결과를 그대로 사용
+            _chosen = _builtin_intent or _default_intent or "GeneralHelp"
+        else:
+            _default_intent = _default_intent or _valid_intents[0]
+            try:
+                from langchain_community.chat_models import ChatOllama
+                _cls_model = ChatOllama(
+                    base_url=os.environ.get("OLLAMA_BASE_URL"),
+                    model=os.getenv("CHAT_SIMPLE_MODEL_NAME") or "qwen2.5",
+                    temperature=0,
+                    num_ctx=int(os.getenv("CHAT_NUM_CTX", "8192")),
+                )
+                _instr = (
+                    "You are an intent classifier for Spotfire Copilot. Read the user's "
+                    "question and reply with EXACTLY ONE of the following intent names and "
+                    "nothing else (no explanation, no punctuation, no quotes):\n"
+                    + ", ".join(_valid_intents)
+                    + "\n\nQuestion: " + _question + "\nIntent:"
+                )
+                _resp = _cls_model.invoke(_instr)
+                _txt = getattr(_resp, "content", str(_resp))
+                # 긴 이름을 먼저 맞춰서 짧은 이름이 그 변형을 가로채지 않게 함
+                _chosen = next(
+                    (
+                        v
+                        for v in sorted(_valid_intents, key=len, reverse=True)
+                        if v.lower() in _txt.lower()
+                    ),
+                    _default_intent,
+                )
+            except Exception as _e:
+                logger.warning("Classification patch failed: %s", _e)
+                _chosen = _default_intent
+
+        logger.info(
+            "Classified question '%s' as intent: %s (builtin classifier said: %s)",
+            _question, _chosen, _builtin_intent or "<none>",
+        )
         return {"result": _chosen, "gpt_prompt": "", "sources": []}
     # --- END PATCH ---
 
@@ -460,29 +480,38 @@ def handle_request(
     # The bundled chat chain answers but does not expose its source documents,
     # so the response "sources" was always empty. We run the same retrieval here
     # and report each unique (file, page) so answers can be verified.
-    try:
-        import orch_utils
-        _embeddings = orch_utils.getEmbeddings()
-        _retriever = orch_utils.getRetriever(None, _embeddings, orch_config)
-        _docs = _retriever.invoke(orch_config.user_prompt)
-        _seen = set()
-        _ref = 1
-        for _d in _docs:
-            _meta = getattr(_d, "metadata", {}) or {}
-            _fname = _meta.get("source") or _meta.get("filename") or ""
-            _page_raw = _meta.get("page") or _meta.get("pageNumber") or 0
-            try:
-                _page = int(float(_page_raw))
-            except (ValueError, TypeError):
-                _page = 0
-            _key = (_fname, _page)
-            if _key in _seen:
-                continue
-            _seen.add(_key)
-            sources.append(SourceObj(fileName=_fname, pageNumber=_page, refId=_ref))
-            _ref += 1
-    except Exception as e:
-        logger.warning("Failed to build sources: %s", e)
+    #
+    # 인덱스가 없는 인텐트(GeneralHelp 등)는 검색할 대상 자체가 없으므로 건너뜀.
+    # 그냥 두면 요청마다 "Redis failed to connect: Index None does not exist" 경고가 쌓임.
+    if not getattr(orch_config, "index_name", None):
+        logger.debug(
+            "Intent %s has no index configured - skipping sources",
+            orch_config.user_intent,
+        )
+    else:
+        try:
+            import orch_utils
+            _embeddings = orch_utils.getEmbeddings()
+            _retriever = orch_utils.getRetriever(None, _embeddings, orch_config)
+            _docs = _retriever.invoke(orch_config.user_prompt)
+            _seen = set()
+            _ref = 1
+            for _d in _docs:
+                _meta = getattr(_d, "metadata", {}) or {}
+                _fname = _meta.get("source") or _meta.get("filename") or ""
+                _page_raw = _meta.get("page") or _meta.get("pageNumber") or 0
+                try:
+                    _page = int(float(_page_raw))
+                except (ValueError, TypeError):
+                    _page = 0
+                _key = (_fname, _page)
+                if _key in _seen:
+                    continue
+                _seen.add(_key)
+                sources.append(SourceObj(fileName=_fname, pageNumber=_page, refId=_ref))
+                _ref += 1
+        except Exception as e:
+            logger.warning("Failed to build sources: %s", e)
     # --- END PATCH ---
 
     # return {"result": result, "gpt_prompt":chat_prompt_value.to_string(), "sources":sources}
