@@ -44,6 +44,23 @@ try:
         prompts.prompt_dict["Agent_User_Docs"] = prompts.prompt_dict["User_Docs"]
 except Exception as _e:
     logger.warning("Failed to adjust User_Docs prompt: %s", _e)
+
+# 인덱스 이름 보정.
+# prompts.py 는 User_Docs 인덱스를 벤더 데모 이름인 "petroleumreservoir" 로,
+# HowTo 는 "spotfiredocs" 로 하드코딩해 둠. data loader 로 다른 이름에 적재했다면
+# 검색이 조용히 0건이 되어 답변이 "문서에서 찾을 수 없습니다" 로만 나옴.
+# .env 에 실제 인덱스 이름을 넣어 맞출 수 있게 함.
+for _intents, _envvar in (
+    (("User_Docs", "Agent_User_Docs"), "COPILOT_USER_DOCS_INDEX"),
+    (("HowTo", "Agent_HowTo", "HowToRAG"), "COPILOT_SPOTFIRE_DOCS_INDEX"),
+):
+    _index = os.getenv(_envvar, "").strip()
+    if not _index:
+        continue
+    for _intent in _intents:
+        if _intent in prompts.prompt_dict:
+            prompts.prompt_dict[_intent]["index_name"] = _index
+            logger.info("Index for %s set to '%s' via %s", _intent, _index, _envvar)
 # --- END PATCH ---
 
 
@@ -436,10 +453,18 @@ def handle_request(
 
     # --- PATCH: 분류기/Spotfire 가 prompt_dict 에 없는 intent 를 보내면 원본은
     # KeyError 로 500 이 났음 → 기본값을 등록해 크래시 방지(buildSystemPrompt 도 통과). ---
+    #
+    # 이때 텍스트 모델(CHAT_COMPLEX)로 고정하면, 화면 스크린샷이 실려 온 요청까지
+    # 텍스트 모델로 가서 대시보드를 전혀 못 읽음. 이미지가 있으면 멀티모달 모델로 보냄.
+    _has_image = bool(
+        getattr(orchestrator_request, "image", None)
+        or getattr(orchestrator_request, "image_url", None)
+    )
     if orch_config.user_intent not in prompts.prompt_dict:
         logger.warning(
-            "Unregistered user_intent '%s' — registering a default entry",
+            "Unregistered user_intent '%s' — registering a default entry (image=%s)",
             orch_config.user_intent,
+            _has_image,
         )
         prompts.prompt_dict[orch_config.user_intent] = {
             "system_prompt": orch_config.system_prompt
@@ -447,9 +472,10 @@ def handle_request(
             "system_prompt_parameters": None,
             "use_secondary_model_plugin": False,
             "llm_name": orch_config.llm_name
+            or (os.getenv("MULTI_MODAL_MODEL_NAME") if _has_image else None)
             or os.getenv("CHAT_COMPLEX_MODEL_NAME")
             or "qwen2.5",
-            "llm_mode": orch_config.llm_mode or "chat",
+            "llm_mode": orch_config.llm_mode or ("vision" if _has_image else "chat"),
             "temperature": orch_config.temperature
             if orch_config.temperature is not None
             else 0.2,
