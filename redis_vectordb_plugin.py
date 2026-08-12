@@ -23,6 +23,22 @@ parent_dir = os.path.dirname(current_file_path)
 INDEX_SCHEMA = os.path.join(parent_dir, "schema.yml")
 
 
+def key_prefix_for(index_name: str) -> str:
+    """인덱스별로 서로 다른 Redis 키 접두사를 만든다.
+
+    RediSearch 인덱스는 "이 접두사로 시작하는 키"로 정의된다. 예전엔 이 값을
+    "summary" 로 고정해 둬서, 인덱스 이름을 나눠도 모든 인덱스가 같은 summary:*
+    키를 덮었다. 그 결과 인덱스가 6개든 10개든 전부 적재된 문서 전체를 보게 되고
+    (FT.SEARCH 건수가 모두 동일하게 나옴), 문서 집합을 나눠 검색하는 것이
+    불가능했다. Spotfire 매뉴얼과 업무 문서를 함께 적재하면 서로 섞인다.
+
+    적재와 검색이 반드시 같은 값을 써야 하므로 양쪽 플러그인이 이 함수를 공유한다.
+    REDIS_KEY_PREFIX 를 지정하면 예전 동작(전 인덱스 공유)으로 되돌릴 수 있다.
+    """
+    override = os.environ.get("REDIS_KEY_PREFIX", "").strip()
+    return override or index_name
+
+
 class RedisRetrieverPlugin:
     @hookimpl
     def getVectorDB(self, index_name: str, embeddings: Any, drop_old: bool) -> Any:
@@ -44,7 +60,7 @@ class RedisRetrieverPlugin:
         vector_db = RedisVectorDB(
             redis_url=redis_url,
             index_name=index_name,
-            key_prefix="summary",
+            key_prefix=key_prefix_for(index_name),
             index_schema=INDEX_SCHEMA,
             embedding=embeddings,
         )
@@ -58,7 +74,7 @@ class RedisRetrieverPlugin:
         vector_db = RedisVectorDB(
             redis_url=os.environ.get("REDIS_URL"),
             index_name=index_name,
-            key_prefix="summary",
+            key_prefix=key_prefix_for(index_name),
             index_schema=INDEX_SCHEMA,
             embedding=embeddings,
         )

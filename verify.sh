@@ -67,9 +67,9 @@ done
 hdr "L2. Ollama 및 모델"
 TAGS=$(curl -s --max-time 10 "$OLLAMA_URL/api/tags" 2>/dev/null)
 if [ -z "$TAGS" ]; then
-    bad "Ollama 응답 없음 ($OLLAMA_URL) - 이후 검사 대부분 실패함"
+    bad "호스트에서 Ollama 응답 없음 ($OLLAMA_URL) - Ollama 가 실행 중인지 확인 (ollama serve)"
 else
-    ok "Ollama 응답함"
+    ok "호스트에서 Ollama 응답함"
     for m in "$EMB_MODEL" "$CHAT_MODEL" "$SIMPLE_MODEL" "$MM_MODEL"; do
         base="${m%%:*}"
         if echo "$TAGS" | grep -q "\"$m\"" || echo "$TAGS" | grep -q "\"$base:"; then
@@ -78,14 +78,26 @@ else
             bad "모델 없음: $m  (ollama pull $m)"
         fi
     done
-    # 컨테이너 안에서 호스트 Ollama 로 실제 도달하는지
-    if docker exec copilot-orchestrator python -c "
+fi
+
+# 컨테이너에서의 도달 여부는 호스트 결과와 별개로 항상 확인한다.
+# 호스트는 되는데 컨테이너만 안 되면 host.docker.internal 라우팅 문제이고,
+# 둘 다 안 되면 Ollama 자체가 안 떠 있는 것 - 원인이 완전히 다르다.
+CONTAINER_ERR=$(docker exec copilot-orchestrator python -c "
 import os,urllib.request
 urllib.request.urlopen(os.environ['OLLAMA_BASE_URL']+'/api/tags', timeout=10)
-" 2>/dev/null; then
-        ok "orchestrator 컨테이너 -> Ollama 도달"
+print('OK')
+" 2>&1)
+if echo "$CONTAINER_ERR" | grep -q "^OK"; then
+    ok "orchestrator 컨테이너 -> Ollama 도달"
+else
+    bad "orchestrator 컨테이너 -> Ollama 도달 실패"
+    echo "         $(echo "$CONTAINER_ERR" | tail -1)"
+    if [ -n "$TAGS" ]; then
+        echo "         호스트는 되는데 컨테이너만 실패 -> Docker 네트워크 문제."
+        echo "         docker compose down && docker compose up -d 로 재생성해볼 것."
     else
-        bad "orchestrator 컨테이너에서 Ollama 도달 실패 (OLLAMA_BASE_URL / host.docker.internal 확인)"
+        echo "         호스트/컨테이너 모두 실패 -> Ollama 가 실행 중이 아님."
     fi
 fi
 
@@ -113,14 +125,28 @@ if [ -z "$INDEXES" ]; then
     bad "Redis 인덱스가 하나도 없음 - data loader 로 문서를 적재하지 않았음"
 else
     ok "인덱스 존재: $(echo "$INDEXES" | tr '\n' ' ')"
+    COUNTS=""
     for idx in $INDEXES; do
         n=$(docker exec copilot-redis redis-cli FT.SEARCH "$idx" "*" LIMIT 0 0 2>/dev/null | head -1 | tr -d '\r')
+        pfx=$(docker exec copilot-redis redis-cli FT.INFO "$idx" 2>/dev/null | tr -d '\r' \
+              | grep -A2 -w prefixes | sed -n '2p')
         if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
-            ok "  $idx : 문서 ${n}건"
+            ok "  $idx : 문서 ${n}건 (키 접두사: ${pfx:-?})"
         else
             bad "  $idx : 0건 (적재 실패했거나 비어 있음)"
         fi
+        COUNTS="$COUNTS $n"
     done
+    # 인덱스마다 건수가 똑같으면 키 접두사가 겹쳐 모두 같은 문서를 보고 있는 것.
+    # RediSearch 인덱스는 "이 접두사로 시작하는 키"로 정의되므로, 접두사가 같으면
+    # 인덱스를 나눠도 문서 집합이 분리되지 않는다.
+    UNIQ=$(echo "$COUNTS" | tr ' ' '\n' | grep -v '^$' | sort -u | wc -l)
+    TOTAL=$(echo "$COUNTS" | tr ' ' '\n' | grep -v '^$' | wc -l)
+    if [ "$TOTAL" -gt 1 ] && [ "$UNIQ" -eq 1 ]; then
+        bad "인덱스 ${TOTAL}개의 문서 수가 전부 동일 -> 키 접두사가 겹쳐 모든 인덱스가"
+        echo "         같은 문서를 공유하고 있음. 문서 집합 분리가 안 되며, Spotfire 매뉴얼을"
+        echo "         적재하면 업무 문서와 섞임. 최신 플러그인으로 재빌드 후 재적재 필요."
+    fi
 fi
 # prompts.py 가 기대하는 이름과 실제 이름이 맞는지
 USER_IDX=$(envval COPILOT_USER_DOCS_INDEX petroleumreservoir)
