@@ -158,9 +158,23 @@ fi
 
 # ---------------------------------------------------------------- L5
 hdr "L5. RAG 답변 (문서 기반 질의)"
-RESP=$(curl -s --max-time 180 -X POST "$BASE_URL/orchestrator" \
+# 문서 4994건에 대한 RAG 는 로컬 모델에서 수 분이 걸릴 수 있고, sources 를 채우려고
+# 검색을 한 번 더 돌기까지 함. 타임아웃과 "빈 응답" 은 원인이 전혀 다르므로 구분한다.
+RAG_START=$(date +%s)
+RESP=$(curl -s --max-time 600 -X POST "$BASE_URL/orchestrator" \
     -H "$AUTH" -H "Content-Type: application/json" \
     --data-binary '{"prompt":"What is this document about?","user_intent":"User_Docs"}')
+CURL_RC=$?
+RAG_SECS=$(( $(date +%s) - RAG_START ))
+if [ "$CURL_RC" = "28" ]; then
+    bad "RAG 응답 타임아웃 (${RAG_SECS}초 초과) - 오류가 아니라 너무 느린 것"
+    echo "         문서 4994건 + topk 10 + num_ctx 16384 조합이면 로컬 모델에선 느릴 수 있음."
+    echo "         index_topk 를 줄이거나 더 작은 chat 모델을 쓰면 빨라짐."
+elif [ "$CURL_RC" != "0" ]; then
+    bad "RAG 요청 실패 (curl exit=$CURL_RC)"
+elif echo "$RESP" | grep -q '"result"'; then
+    ok "응답 수신 (${RAG_SECS}초)"
+fi
 if echo "$RESP" | grep -q '"result"'; then
     RESULT=$(echo "$RESP" | sed -E 's/.*"result":"(([^"\\]|\\.)*)".*/\1/' | head -c 200)
     if [ -n "$RESULT" ]; then
