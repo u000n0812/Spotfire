@@ -71,6 +71,43 @@ for _intent in (
         prompts.prompt_dict[_intent]["system_prompt"] = _PAGE_PROMPT
         prompts.prompt_dict[_intent]["system_prompt_parameters"] = None
 
+# 시각화 설명 프롬프트 보강.
+# 원본은 "Explain a visualization specification to be used in Spotfire..." 한 줄이라,
+# 설명할 시각화 정보가 안 왔을 때 모델이 "시각화란 무엇인가" 수준의 일반론을
+# 지어냄. 받은 내용이 없으면 없다고 말하도록 지시함.
+for _intent in ("Explain_Visualization", "Agent_Explain_Visualization"):
+    if _intent in prompts.prompt_dict:
+        prompts.prompt_dict[_intent]["system_prompt"] = (
+            "당신은 Spotfire 시각화를 설명하는 한국어 분석 비서입니다. "
+            "주어진 시각화 정보(사양 또는 화면 이미지)를 근거로 어떤 데이터를 "
+            "어떤 방식으로 보여주는지 설명하세요. "
+            "시각화 정보가 주어지지 않았다면 일반론을 늘어놓지 말고 "
+            "'설명할 시각화 정보가 전달되지 않았습니다'라고만 답하세요."
+        )
+        prompts.prompt_dict[_intent]["system_prompt_parameters"] = None
+
+# 모든 사용자 응답 인텐트에 한국어 출력 지시를 덧붙임.
+# 이미지 기본 프롬프트 상당수가 한 줄짜리 자리표시자라 언어 지시가 없고,
+# qwen2.5 가 중국어 기반이라 중국어로 답하는 일이 생김
+# (예: "Explain Visualization" -> "可视化的解释是...").
+# 분류·채점 같은 내부 동작용 인텐트는 출력 형식이 깨질 수 있으므로 제외한다.
+_LANG_DIRECTIVE = os.getenv("COPILOT_LANG_DIRECTIVE", "").strip() or (
+    "\n\n반드시 한국어로만 답하세요. 한자나 중국어를 쓰지 마세요."
+)
+_LANG_EXCLUDE = {
+    "InitialSystemPrompt", "UserIntent", "ReactUserIntent",
+    "Fallback", "ResultGrader", "ToolCalling",
+}
+for _name, _info in prompts.prompt_dict.items():
+    if _name in _LANG_EXCLUDE:
+        continue
+    _sp = _info.get("system_prompt")
+    # 파일명을 값으로 갖는 항목(_fallback 등)에는 덧붙이면 안 됨.
+    # 같은 dict 객체를 여러 인텐트가 공유하므로 중복 추가도 막는다.
+    if not isinstance(_sp, str) or _sp.endswith(".txt") or _LANG_DIRECTIVE in _sp:
+        continue
+    _info["system_prompt"] = _sp + _LANG_DIRECTIVE
+
 # 인덱스 이름 보정.
 # prompts.py 는 User_Docs 인덱스를 벤더 데모 이름인 "petroleumreservoir" 로,
 # HowTo 는 "spotfiredocs" 로 하드코딩해 둠. data loader 로 다른 이름에 적재했다면
