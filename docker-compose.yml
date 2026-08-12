@@ -50,6 +50,8 @@ services:
 
       # VectorDB (같은 네트워크의 redis 서비스명으로 접근)
       REDIS_URL: ${REDIS_URL}
+      # orchestrator 쪽과 반드시 같은 값이어야 적재한 문서를 검색할 수 있음
+      REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-}
 
   orchestrator:
     image: public.ecr.aws/tds/llm-orchestrator:latest
@@ -101,11 +103,26 @@ services:
       CHAT_COMPLEX_MODEL_NAME: ${CHAT_COMPLEX_MODEL_NAME}
       EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME}
 
+      # 모델 컨텍스트 크기. 지정하지 않으면 플러그인 기본값(8192)을 씀.
+      # 스크린샷 판독은 토큰을 많이 먹으므로 넉넉히 잡아야 함.
+      CHAT_NUM_CTX: ${CHAT_NUM_CTX:-}
+
+      # 인텐트 라벨 교정 (Analyst 가 라벨을 거부할 때만 사용, 비우면 내장 분류기 결과 사용)
+      COPILOT_INTENT_LABELS: ${COPILOT_INTENT_LABELS:-}
+      COPILOT_INTENT_DEFAULT: ${COPILOT_INTENT_DEFAULT:-}
+
+      # prompts.py 가 하드코딩한 벤더 데모 인덱스명을 실제 이름으로 교정
+      COPILOT_USER_DOCS_INDEX: ${COPILOT_USER_DOCS_INDEX:-}
+      COPILOT_SPOTFIRE_DOCS_INDEX: ${COPILOT_SPOTFIRE_DOCS_INDEX:-}
+
       # Ollama
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
 
       # VectorDB
       REDIS_URL: ${REDIS_URL}
+      # 비워두면 인덱스 이름을 키 접두사로 사용(인덱스별 문서 분리).
+      # data-loader 와 반드시 같은 값이어야 검색이 됨.
+      REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-}
 
       # Optional monitoring (Langsmith)
       # 빈 값이 들어가면 "LangSmith API URL cannot be empty" 오류로 컨테이너가 죽으므로 기본 URL 지정
