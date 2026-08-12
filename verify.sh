@@ -168,11 +168,27 @@ else
             fi
         done
     fi
+
 fi
 # prompts.py 가 기대하는 이름과 실제 이름이 맞는지
 USER_IDX=$(envval COPILOT_USER_DOCS_INDEX petroleumreservoir)
 if echo "$INDEXES" | grep -qx "$USER_IDX"; then
     ok "User_Docs 가 찾을 인덱스 '$USER_IDX' 존재"
+
+    # 실제 저장된 문서의 필드 구성을 확인한다. redis_schema.yml 은 content/source/
+    # page/content_vector 를 선언하는데, 적재 시 스키마가 달랐다면 검색이 0건이 되거나
+    # sources 를 채울 메타데이터(source/page)가 아예 없다.
+    SAMPLE_KEY=$(docker exec copilot-redis redis-cli \
+        FT.SEARCH "$USER_IDX" "*" LIMIT 0 1 RETURN 0 2>/dev/null | tr -d '\r' | sed -n '2p')
+    if [ -n "$SAMPLE_KEY" ]; then
+        FIELDS=$(docker exec copilot-redis redis-cli --raw HKEYS "$SAMPLE_KEY" 2>/dev/null | tr '\n' ' ')
+        ok "저장된 문서 예시: $SAMPLE_KEY"
+        echo "         필드: $FIELDS"
+        for want in content source page content_vector; do
+            echo "$FIELDS" | grep -qw "$want" \
+                || bad "  문서에 '$want' 필드가 없음 - redis_schema.yml 과 적재 결과가 다름"
+        done
+    fi
 else
     bad "User_Docs 가 찾을 인덱스 '$USER_IDX' 없음 -> .env 에 COPILOT_USER_DOCS_INDEX 로 실제 이름 지정 필요"
 fi
@@ -205,6 +221,16 @@ if echo "$RESP" | grep -q '"result"'; then
     fi
     if echo "$RESP" | grep -q '"sources":\[\]'; then
         warn "sources 가 비어 있음 - 검색이 0건이거나 메타데이터(source/page) 누락"
+        # 출처 수집 패치는 실패해도 WARNING 으로만 남아 "오류 없음" 검사에 안 걸린다.
+        # 검색이 왜 0건인지는 여기에 그대로 찍히므로 반드시 확인해야 함.
+        SRC_ERR=$(docker logs --tail 400 copilot-orchestrator 2>&1 \
+            | grep "Failed to build sources" | tail -2)
+        if [ -n "$SRC_ERR" ]; then
+            echo "         검색 실패 원인:"
+            echo "$SRC_ERR" | sed 's/^/           /'
+        else
+            echo "         검색 자체는 오류 없이 0건 반환 (질의와 문서가 안 맞거나 인덱스가 빈 것)"
+        fi
     else
         ok "sources 채워짐 (출처 추적 동작)"
     fi
