@@ -147,6 +147,27 @@ else
         echo "         같은 문서를 공유하고 있음. 문서 집합 분리가 안 되며, Spotfire 매뉴얼을"
         echo "         적재하면 업무 문서와 섞임. 최신 플러그인으로 재빌드 후 재적재 필요."
     fi
+
+    # 적재 당시 임베딩 모델과 지금 검색에 쓰는 모델의 벡터 차원이 다르면
+    # 오류 없이 검색 결과가 0건이 됨 -> 답변은 "문서에서 찾을 수 없습니다",
+    # sources 는 빈 채로 나옴. nomic-embed-text=768, bge-m3=1024 로 서로 다르므로
+    # 임베딩 모델을 바꾼 뒤 재적재하지 않았다면 여기서 걸린다.
+    EMB_DIM=$(curl -s --max-time 10 "$OLLAMA_URL/api/show" \
+        -d "{\"model\":\"$EMB_MODEL\"}" 2>/dev/null \
+        | grep -oE '"[a-z0-9_]+\.embedding_length":[0-9]+' | head -1 | grep -oE '[0-9]+$')
+    if [ -n "$EMB_DIM" ]; then
+        for idx in $INDEXES; do
+            IDX_DIM=$(docker exec copilot-redis redis-cli FT.INFO "$idx" 2>/dev/null \
+                | tr -d '\r' | grep -A1 -wx "dim" | sed -n '2p')
+            [ -z "$IDX_DIM" ] && continue
+            if [ "$IDX_DIM" = "$EMB_DIM" ]; then
+                ok "  $idx : 벡터 차원 $IDX_DIM = $EMB_MODEL($EMB_DIM) 일치"
+            else
+                bad "  $idx : 벡터 차원 $IDX_DIM 인데 현재 임베딩 $EMB_MODEL 은 $EMB_DIM"
+                echo "         차원이 다르면 검색이 오류 없이 0건이 됨 -> 이 인덱스는 재적재 필요."
+            fi
+        done
+    fi
 fi
 # prompts.py 가 기대하는 이름과 실제 이름이 맞는지
 USER_IDX=$(envval COPILOT_USER_DOCS_INDEX petroleumreservoir)
