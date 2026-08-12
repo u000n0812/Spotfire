@@ -535,6 +535,24 @@ def handle_request(
         getattr(orchestrator_request, "image", None)
         or getattr(orchestrator_request, "image_url", None)
     )
+
+    # --- PATCH: Spotfire 가 request_tag 로 알려준 인텐트를 우선 사용 ---
+    # "Explain the current page" 요청은 request_tag='InterpretPageData' 로 오는데,
+    # user_intent 는 비어 있어서 내장 분류기가 프롬프트만 보고 'GeneralHelp' 로
+    # 분류해 버림. 그 결과 멀티모달 모델 대신 텍스트 모델로 가서 화면을 못 읽음.
+    # 프론트엔드가 원하는 동작을 직접 알려준 것이므로 분류 결과보다 우선한다.
+    # 클라이언트가 user_intent 를 명시한 경우엔 그대로 존중함.
+    _client_intent = getattr(orchestrator_request, "user_intent", None)
+    _tag = getattr(orchestrator_request, "request_tag", None)
+    if not _client_intent and _tag and _tag in prompts.prompt_dict:
+        if orch_config.user_intent != _tag:
+            logger.info(
+                "Using request_tag '%s' as intent instead of classifier result '%s'",
+                _tag, orch_config.user_intent,
+            )
+            orch_config.user_intent = _tag
+    # --- END PATCH ---
+
     if orch_config.user_intent not in prompts.prompt_dict:
         logger.warning(
             "Unregistered user_intent '%s' — registering a default entry (image=%s)",
