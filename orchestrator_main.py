@@ -48,6 +48,29 @@ try:
 except Exception as _e:
     logger.warning("Failed to adjust User_Docs prompt: %s", _e)
 
+# 화면 해석 프롬프트 보강.
+# 이미지가 갖고 있는 원본 프롬프트는 한 줄짜리 자리표시자라
+# ("Interpret visual data in Spotfire. Use the context provided to generate a
+#  response.") 모델이 무엇을 어떻게 설명할지 알 수 없어, "Explain Page" 에
+# "현재 페이지의 내용을 설명해주세요." 처럼 질문을 되풀이하는 답이 나옴.
+# COPILOT_PAGE_PROMPT 로 덮어쓸 수 있음.
+_PAGE_PROMPT = os.getenv("COPILOT_PAGE_PROMPT", "").strip() or (
+    "당신은 Spotfire 대시보드를 해석하는 한국어 분석 비서입니다. "
+    "주어진 화면 이미지를 보고 아래 항목을 한국어로 설명하세요.\n"
+    "1. 페이지에 있는 시각화의 종류와 개수\n"
+    "2. 각 시각화의 축과 범례가 나타내는 항목\n"
+    "3. 눈에 띄는 패턴, 추세, 이상치\n"
+    "이미지에서 확인할 수 없는 값은 추측하지 말고 "
+    "'이미지에서 확인할 수 없음'이라고 답하세요."
+)
+for _intent in (
+    "InterpretPageData", "Agent_InterpretPageData",
+    "Interpret_Visual_Data", "Agent_Interpret_Visual_Data",
+):
+    if _intent in prompts.prompt_dict:
+        prompts.prompt_dict[_intent]["system_prompt"] = _PAGE_PROMPT
+        prompts.prompt_dict[_intent]["system_prompt_parameters"] = None
+
 # 인덱스 이름 보정.
 # prompts.py 는 User_Docs 인덱스를 벤더 데모 이름인 "petroleumreservoir" 로,
 # HowTo 는 "spotfiredocs" 로 하드코딩해 둠. data loader 로 다른 이름에 적재했다면
@@ -543,6 +566,30 @@ def handle_request(
 
     # Update config with system prompt information
     orch_config.update(system_prompt_info)
+
+    # --- PATCH: 이미지가 실려 온 요청은 vision 모드로 보냄 ---
+    # prompts.py 의 InterpretPageData / Interpret_Visual_Data 는 llm_mode 가
+    # "chat" 인데, 이미지 전용 인텐트(ImageAnalysis, MultiModalRAG)만 "vision" 임.
+    # 체인이 vision 모드에서만 이미지를 첨부한다면 화면이 모델에 전달되지 않아
+    # 모델이 질문만 되풀이하게 됨. 이미지가 실제로 있을 때만 바꾸므로,
+    # 이미지 없는 요청의 동작은 그대로임.
+    if _has_image and getattr(orch_config, "llm_mode", None) != "vision":
+        logger.info(
+            "Request carries an image - switching llm_mode '%s' -> 'vision' (intent %s)",
+            getattr(orch_config, "llm_mode", None), orch_config.user_intent,
+        )
+        orch_config.llm_mode = "vision"
+    elif not _has_image and orch_config.user_intent in (
+        "InterpretPageData", "Agent_InterpretPageData",
+        "Interpret_Visual_Data", "Agent_Interpret_Visual_Data",
+    ):
+        # 화면 해석 인텐트인데 이미지가 없으면 모델이 볼 게 없음.
+        # 프론트엔드가 스크린샷을 안 보낸 것이므로 원인을 로그에 남긴다.
+        logger.warning(
+            "Intent %s has no image attached - Spotfire did not send a screenshot",
+            orch_config.user_intent,
+        )
+    # --- END PATCH ---
 
     # --- PATCH: llm_name 이 비어 있으면 500 이 나므로 채워 넣음 ---
     # prompts.py 의 HowToCustomModel 은 llm_name 으로 SECONDARY_MODEL_NAME 을 쓰는데
