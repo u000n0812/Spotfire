@@ -175,6 +175,18 @@ USER_IDX=$(envval COPILOT_USER_DOCS_INDEX petroleumreservoir)
 if echo "$INDEXES" | grep -qx "$USER_IDX"; then
     ok "User_Docs 가 찾을 인덱스 '$USER_IDX' 존재"
 
+    # 검색에 쓸 키 접두사가 실제 저장된 접두사와 다르면 오류 없이 0건이 된다.
+    # (REDIS_KEY_PREFIX 를 비우면 코드가 인덱스 이름을 접두사로 계산함)
+    WANT_PREFIX=$(envval REDIS_KEY_PREFIX "$USER_IDX")
+    REAL_PREFIX=$(docker exec copilot-redis redis-cli FT.INFO "$USER_IDX" 2>/dev/null \
+        | tr -d '\r' | grep -A2 -w prefixes | sed -n '2p')
+    if [ -n "$REAL_PREFIX" ] && [ "$WANT_PREFIX" != "$REAL_PREFIX" ]; then
+        bad "키 접두사 불일치: 검색은 '$WANT_PREFIX' 로 찾는데 저장된 키는 '$REAL_PREFIX'"
+        echo "         이러면 오류 없이 검색 결과가 0건이 됨 -> .env 에 REDIS_KEY_PREFIX=$REAL_PREFIX"
+    else
+        ok "키 접두사 일치: '$WANT_PREFIX'"
+    fi
+
     # 실제 저장된 문서의 필드 구성을 확인한다. redis_schema.yml 은 content/source/
     # page/content_vector 를 선언하는데, 적재 시 스키마가 달랐다면 검색이 0건이 되거나
     # sources 를 채울 메타데이터(source/page)가 아예 없다.
