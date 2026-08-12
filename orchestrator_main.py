@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException, Query, Depends, status, Form
+from fastapi import FastAPI, HTTPException, Query, Depends, status, Form, Request
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from typing import Annotated
 import uvicorn
@@ -6,6 +7,8 @@ import os
 from pydantic import BaseModel, Field
 from typing import Optional
 import logging
+import traceback
+from string import Template
 
 
 from langsmith import Client
@@ -61,6 +64,38 @@ for _intents, _envvar in (
         if _intent in prompts.prompt_dict:
             prompts.prompt_dict[_intent]["index_name"] = _index
             logger.info("Index for %s set to '%s' via %s", _intent, _index, _envvar)
+# --- END PATCH ---
+
+
+# --- PATCH: 프롬프트 템플릿 치환 실패로 500 이 나는 것을 막음 ---
+# prompts.buildSystemPrompt 는 Template.substitute 를 쓰는데, 시스템 프롬프트에
+# 있는 ${...} 자리표시자를 client_data 가 하나라도 못 채우면 KeyError 를 던지고
+# 그대로 500 이 됨. safe_substitute 로 물러나 못 채운 자리만 남기고 진행함.
+_orig_build_system_prompt = prompts.buildSystemPrompt
+
+
+def _safe_build_system_prompt(user_intent, client_data):
+    try:
+        return _orig_build_system_prompt(user_intent, client_data)
+    except Exception as _e:
+        logger.warning(
+            "buildSystemPrompt failed for intent '%s' (%s: %s) - retrying with safe_substitute",
+            user_intent, type(_e).__name__, _e,
+        )
+        _info = prompts.prompt_dict.get(user_intent) or {}
+        _raw = _info.get("system_prompt") or ""
+        _mapping = {}
+        for _d in client_data or []:
+            _name = getattr(_d, "data_name", None)
+            if _name:
+                _mapping[_name] = getattr(_d, "value", "")
+        try:
+            return Template(_raw).safe_substitute(**_mapping)
+        except Exception:
+            return _raw
+
+
+prompts.buildSystemPrompt = _safe_build_system_prompt
 # --- END PATCH ---
 
 
@@ -266,6 +301,23 @@ app = FastAPI(
         "url": "https://www.apache.org/licenses/LICENSE-2.0.html",
     },
 )
+
+
+# --- PATCH: 처리되지 않은 예외의 스택트레이스를 로그와 응답 양쪽에 남김 ---
+# 원래는 Analyst 에 "500 InternalServerError / no additional details" 만 떠서
+# 원인을 알 수 없었음. 어느 경로에서 무엇이 터졌는지 로그에 전체 트레이스백을
+# 남기고, 응답에도 예외 타입과 메시지를 실어 보냄.
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    logger.error(
+        "Unhandled exception on %s %s\n%s",
+        request.method, request.url.path, traceback.format_exc(),
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "%s: %s" % (type(exc).__name__, exc)},
+    )
+# --- END PATCH ---
 
 
 @app.post("/token", response_model=authentication.Token)
@@ -491,6 +543,21 @@ def handle_request(
 
     # Update config with system prompt information
     orch_config.update(system_prompt_info)
+
+    # --- PATCH: llm_name 이 비어 있으면 500 이 나므로 채워 넣음 ---
+    # prompts.py 의 HowToCustomModel 은 llm_name 으로 SECONDARY_MODEL_NAME 을 쓰는데
+    # 이 환경변수가 .env 에 없어 None 이 됨 → ChatOllama(model=None) 로 예외 발생.
+    # (가이드상 secondary 플러그인은 openai/az_openai 만 지원하므로 Ollama 구성에선
+    #  애초에 쓸 수 없는 경로임 → 일반 chat 모델로 넘김)
+    if not getattr(orch_config, "llm_name", None):
+        _fallback_model = os.getenv("CHAT_COMPLEX_MODEL_NAME") or "qwen2.5"
+        logger.warning(
+            "Intent '%s' has no llm_name - falling back to %s",
+            orch_config.user_intent, _fallback_model,
+        )
+        orch_config.llm_name = _fallback_model
+        orch_config.use_secondary_model_plugin = False
+    # --- END PATCH ---
 
     # Display the configuration
     orch_config.display()
