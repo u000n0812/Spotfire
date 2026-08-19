@@ -36,8 +36,15 @@ envval() {
     echo "${v:-$def}"
 }
 
-CLIENT_ID=$(envval COPILOT_CLIENT_ID spotfire)
+# 2.3.0 은 OAUTH2_CLIENT_ID / OAUTH2_CLIENT_SECRET_HASH 를 쓰고,
+# 2.0.0 시절 자체 패치는 COPILOT_CLIENT_ID / _SECRET 을 썼다. 둘 다 지원.
+# secret 은 .env 에 해시로만 있으므로 평문은 COPILOT_CLIENT_SECRET 에서 가져온다.
+CLIENT_ID=$(envval OAUTH2_CLIENT_ID "$(envval COPILOT_CLIENT_ID spotfire)")
 CLIENT_SECRET=$(envval COPILOT_CLIENT_SECRET spotfire)
+
+# 2.3.0 은 /orchestrator 본문에 user_id / document_id 를 요구한다(없으면 422).
+# 2.0.0 은 모르는 필드를 무시하므로 양쪽 버전에서 그대로 쓸 수 있다.
+REQ_IDS=',"user_id":"verify-script","document_id":"verify-doc"'
 EMB_MODEL=$(envval EMBEDDING_MODEL_NAME bge-m3)
 MM_MODEL=$(envval MULTI_MODAL_MODEL_NAME llava)
 CHAT_MODEL=$(envval CHAT_COMPLEX_MODEL_NAME qwen2.5)
@@ -115,8 +122,12 @@ else
 fi
 code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 \
     "$BASE_URL/system-prompt/user-intents" -H "$AUTH")
-[ "$code" = "200" ] && ok "토큰으로 보호된 엔드포인트 접근 OK" \
-                    || bad "보호된 엔드포인트 HTTP $code"
+case "$code" in
+    200)     ok "토큰으로 보호된 엔드포인트 접근 OK" ;;
+    401|403) bad "보호된 엔드포인트 HTTP $code - 토큰이 거부됨(자격증명 불일치)" ;;
+    404)     warn "보호된 엔드포인트 HTTP 404 - 이 버전엔 /system-prompt/user-intents 가 없음(인증 문제 아님)" ;;
+    *)       bad "보호된 엔드포인트 HTTP $code" ;;
+esac
 
 # ---------------------------------------------------------------- L4
 hdr "L4. 벡터 DB 적재 상태"
@@ -212,7 +223,7 @@ hdr "L5. RAG 답변 (문서 기반 질의)"
 RAG_START=$(date +%s)
 RESP=$(curl -s --max-time 600 -X POST "$BASE_URL/orchestrator" \
     -H "$AUTH" -H "Content-Type: application/json" \
-    --data-binary '{"prompt":"What is this document about?","user_intent":"User_Docs"}')
+    --data-binary "{\"prompt\":\"What is this document about?\",\"user_intent\":\"User_Docs\"$REQ_IDS}")
 CURL_RC=$?
 RAG_SECS=$(( $(date +%s) - RAG_START ))
 if [ "$CURL_RC" = "28" ]; then
@@ -254,7 +265,7 @@ fi
 hdr "L6. 인텐트 분류 (Analyst 에러의 직접 원인 지점)"
 CLS=$(curl -s --max-time 120 -X POST "$BASE_URL/orchestrator" \
     -H "$AUTH" -H "Content-Type: application/json" \
-    --data-binary '{"prompt":"Classify this question: how many rows are in the table","request_tag":"UserIntent"}')
+    --data-binary "{\"prompt\":\"Classify this question: how many rows are in the table\",\"request_tag\":\"UserIntent\"$REQ_IDS}")
 LABEL=$(echo "$CLS" | sed -E 's/.*"result":"([^"]*)".*/\1/')
 if [ -n "$LABEL" ] && [ "$LABEL" != "$CLS" ]; then
     ok "분류 라벨 반환: '$LABEL'"
@@ -278,7 +289,7 @@ esac
 PNG1PX="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 VIS=$(curl -s --max-time 180 -X POST "$BASE_URL/orchestrator" \
     -H "$AUTH" -H "Content-Type: application/json" \
-    --data-binary "{\"prompt\":\"Describe this image.\",\"user_intent\":\"InterpretPageData\",\"image\":\"$PNG1PX\"}")
+    --data-binary "{\"prompt\":\"Describe this image.\",\"user_intent\":\"InterpretPageData\",\"image\":\"$PNG1PX\"$REQ_IDS}")
 if echo "$VIS" | grep -q '"result"'; then
     ok "이미지 포함 요청이 오류 없이 처리됨 (vision 경로 살아 있음)"
 else
