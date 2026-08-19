@@ -159,6 +159,25 @@ prompts.buildSystemPrompt = _safe_build_system_prompt
 # --- END PATCH ---
 
 
+# --- PATCH: 프론트엔드와 백엔드의 인텐트 이름 표기 차이를 흡수 ---
+# Spotfire 는 request_tag 를 밑줄 없는 CamelCase 로 보내는데
+# (예: "InterpretVisualData") prompts.py 는 밑줄을 넣어 등록한다
+# (예: "Interpret_Visual_Data"). 문자열이 안 맞아 매칭에 실패하면
+# 분류기가 지어낸 이름("Visualization" 등)으로 떨어져 일반 채팅 모델로 감.
+# 밑줄과 대소문자를 무시하고 실제 등록 키를 찾아 준다.
+def resolve_intent(name):
+    if not name:
+        return None
+    if name in prompts.prompt_dict:
+        return name
+    target = name.replace("_", "").lower()
+    for key in prompts.prompt_dict:
+        if key.replace("_", "").lower() == target:
+            return key
+    return None
+# --- END PATCH ---
+
+
 class HistoryMsg(BaseModel):
     role: str
     content: str
@@ -579,9 +598,10 @@ def handle_request(
     # 분류해 버림. 그 결과 멀티모달 모델 대신 텍스트 모델로 가서 화면을 못 읽음.
     # 프론트엔드가 원하는 동작을 직접 알려준 것이므로 분류 결과보다 우선한다.
     # 클라이언트가 user_intent 를 명시한 경우엔 그대로 존중함.
+    # request_tag 는 밑줄 없는 표기로 오므로(InterpretVisualData) 등록 키로 변환한다.
     _client_intent = getattr(orchestrator_request, "user_intent", None)
-    _tag = getattr(orchestrator_request, "request_tag", None)
-    if not _client_intent and _tag and _tag in prompts.prompt_dict:
+    _tag = resolve_intent(getattr(orchestrator_request, "request_tag", None))
+    if not _client_intent and _tag:
         if orch_config.user_intent != _tag:
             logger.info(
                 "Using request_tag '%s' as intent instead of classifier result '%s'",
