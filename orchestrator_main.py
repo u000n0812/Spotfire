@@ -622,26 +622,36 @@ def handle_request(
     # Update config with system prompt information
     orch_config.update(system_prompt_info)
 
-    # --- PATCH: 이미지가 실려 온 요청은 vision 모드로 보냄 ---
-    # prompts.py 의 InterpretPageData / Interpret_Visual_Data 는 llm_mode 가
-    # "chat" 인데, 이미지 전용 인텐트(ImageAnalysis, MultiModalRAG)만 "vision" 임.
-    # 체인이 vision 모드에서만 이미지를 첨부한다면 화면이 모델에 전달되지 않아
-    # 모델이 질문만 되풀이하게 됨. 이미지가 실제로 있을 때만 바꾸므로,
-    # 이미지 없는 요청의 동작은 그대로임.
-    if _has_image and getattr(orch_config, "llm_mode", None) != "vision":
-        logger.info(
-            "Request carries an image - switching llm_mode '%s' -> 'vision' (intent %s)",
-            getattr(orch_config, "llm_mode", None), orch_config.user_intent,
-        )
-        orch_config.llm_mode = "vision"
-    elif not _has_image and orch_config.user_intent in (
+    # --- PATCH: 이미지가 실려 온 요청을 실제로 이미지를 보는 체인으로 보냄 ---
+    # orchestrator.py 의 processRequest 는 user_intent 문자열로 체인을 고르는데,
+    # 이미지를 모델 메시지에 붙이는 체인은 "ImageAnalysis"(__executeVisionChain)
+    # 하나뿐임. InterpretPageData / Interpret_Visual_Data 는 그 분기 목록에 없어
+    # else 의 __executeChatChain 으로 떨어지고, 이 체인은 이미지를 아예 안 붙임.
+    # 그래서 화면 해석 요청이 모델에 그림 없이 도달해 "이미지를 보여달라"는 답만 나옴.
+    #
+    # 시스템 프롬프트는 위에서 원래 인텐트 것으로 이미 반영했으므로,
+    # 여기서는 체인 선택에 쓰이는 이름만 바꾼다.
+    #
+    # 반드시 이미지가 실제로 있을 때만 바꿔야 함: chains.py 는 이미지가 없으면
+    # 디스크의 벤더 데모 이미지(./images/F1.png)를 대신 읽는다. 이미지 없이 이
+    # 체인으로 보내면 남의 그림을 사용자 대시보드인 양 설명하는 답이 나온다.
+    _VISUAL_INTENTS = (
         "InterpretPageData", "Agent_InterpretPageData",
         "Interpret_Visual_Data", "Agent_Interpret_Visual_Data",
-    ):
+    )
+    if _has_image and orch_config.user_intent in _VISUAL_INTENTS:
+        logger.info(
+            "Routing %s through the vision chain so the screenshot reaches the model",
+            orch_config.user_intent,
+        )
+        orch_config.user_intent = "ImageAnalysis"
+        orch_config.llm_mode = "vision"
+    elif not _has_image and orch_config.user_intent in _VISUAL_INTENTS:
         # 화면 해석 인텐트인데 이미지가 없으면 모델이 볼 게 없음.
         # 프론트엔드가 스크린샷을 안 보낸 것이므로 원인을 로그에 남긴다.
         logger.warning(
-            "Intent %s has no image attached - Spotfire did not send a screenshot",
+            "Intent %s arrived with no screenshot - Spotfire did not attach one, "
+            "so the model has nothing to look at",
             orch_config.user_intent,
         )
     # --- END PATCH ---
