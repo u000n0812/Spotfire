@@ -39,6 +39,8 @@ envval() {
 # 2.3.0 은 OAUTH2_CLIENT_ID / OAUTH2_CLIENT_SECRET_HASH 를 쓰고,
 # 2.0.0 시절 자체 패치는 COPILOT_CLIENT_ID / _SECRET 을 썼다. 둘 다 지원.
 # secret 은 .env 에 해시로만 있으므로 평문은 COPILOT_CLIENT_SECRET 에서 가져온다.
+ORCH_VER=$(docker exec copilot-orchestrator env 2>/dev/null \
+    | grep '^FASTAPI_APP_VERSION=' | cut -d= -f2 | tr -d '\r')
 CLIENT_ID=$(envval OAUTH2_CLIENT_ID "$(envval COPILOT_CLIENT_ID spotfire)")
 CLIENT_SECRET=$(envval COPILOT_CLIENT_SECRET spotfire)
 
@@ -286,9 +288,18 @@ if [ -n "$LABEL" ]; then
     ok "분류 라벨 반환: '$LABEL'"
     echo "         -> Analyst 가 이 라벨을 거부하면 'Error determining intent' 가 뜸."
     echo "            거부되면 .env 의 COPILOT_INTENT_LABELS 로 이름을 교정해야 함."
-    # 라벨에 공백/문장이 섞이면 확실한 실패
+    # 라벨에 공백/문장이 섞이면 정해진 라벨이 아니라 자유형식 답변이 온 것.
+    # 다만 2.0.0 과 2.3.x 는 분류 방식이 다르다. 2.3.x 에는 스레드/에이전트 개념이
+    # 있어 프론트엔드가 이 경로로 분류하지 않을 수 있으므로, 여기서 자유형식이
+    # 나와도 Analyst 가 실패한다고 단정할 수 없다. 판정은 Analyst 에서 해야 함.
     case "$LABEL" in
-        *" "*) bad "라벨에 공백 포함 - 자유형식 문장이 반환됨 (분류 실패)" ;;
+        *" "*)
+            case "$ORCH_VER" in
+                2.0.*|"") bad "라벨에 공백 포함 - 자유형식 문장이 반환됨 (분류 실패)" ;;
+                *)        warn "자유형식 문장이 반환됨. ${ORCH_VER} 에서는 프론트엔드가"
+                          echo "         이 경로로 분류하지 않을 수 있으므로 Analyst 에서 직접 확인할 것"
+                          echo "         (L8-4 데이터 질문에서 'Error determining intent' 가 뜨는지)" ;;
+            esac ;;
     esac
 elif answered "$CLS"; then
     warn "분류는 처리됐으나 라벨을 못 읽음: $(echo "$CLS" | head -c 200)"
