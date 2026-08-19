@@ -54,7 +54,9 @@ services:
       REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-}
 
   orchestrator:
-    image: public.ecr.aws/tds/llm-orchestrator:latest
+    # 태그는 .env 의 ORCHESTRATOR_TAG 로 지정 (미지정 시 latest).
+    # latest 가 FASTAPI_APP_VERSION=2.0.0 이라 프론트엔드보다 뒤처질 수 있음.
+    image: public.ecr.aws/tds/llm-orchestrator:${ORCHESTRATOR_TAG:-latest}
     container_name: copilot-orchestrator
     restart: unless-stopped
     depends_on:
@@ -77,6 +79,11 @@ services:
       - "./redis_schema.yml:/app/plugins/retrievers/schema.yml:ro"
       # 원본 main.py 는 응답의 sources 를 항상 빈 채로 반환 → 검색 문서로 sources 를
       # 채우도록 패치한 main.py 로 교체 (파일 상단 주석 참고)
+      #
+      # !!! ORCHESTRATOR_TAG 를 바꿔 다른 버전 이미지를 쓸 때는 이 줄을 반드시
+      # 주석 처리할 것. 이 파일은 2.0.0 이미지의 main.py 를 기반으로 패치한 것이라,
+      # 새 이미지에 덮어씌우면 그 버전의 새 엔드포인트(/threads, /agents 등)가
+      # 통째로 사라져 업그레이드가 무의미해진다.
       - "./orchestrator_main.py:/app/main.py:ro"
       # 채팅 모델 num_ctx 미지정(기본 2048)으로 문맥 초과 시 출력이 깨짐 → num_ctx 상향 패치
       - "./ollama_model_plugin.py:/app/plugins/models/ollama.py:ro"
