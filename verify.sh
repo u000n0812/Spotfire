@@ -50,6 +50,19 @@ MM_MODEL=$(envval MULTI_MODAL_MODEL_NAME llava)
 CHAT_MODEL=$(envval CHAT_COMPLEX_MODEL_NAME qwen2.5)
 SIMPLE_MODEL=$(envval CHAT_SIMPLE_MODEL_NAME qwen2.5)
 
+
+# 응답에서 답변 텍스트를 꺼낸다. 버전마다 스키마가 달라서 여러 필드를 시도한다.
+#   2.0.0 : {"result":"...","sources":[...]}
+#   2.3.0 : {"id":...,"status":"completed","thread_id":...,"content"/"message":...}
+answer_text() {
+    echo "$1" | grep -oE '"(result|content|text|answer)"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' \
+        | head -1 | sed -E 's/^"[a-z]+"[[:space:]]*:[[:space:]]*"//; s/"$//'
+}
+# 요청이 처리됐는지 판정 (2.0.0 의 result, 2.3.0 의 status=completed 둘 다 인정)
+answered() {
+    echo "$1" | grep -qE '"result"|"status"[[:space:]]*:[[:space:]]*"completed"'
+}
+
 echo "==================================================="
 echo " Spotfire Copilot 동작 검증"
 echo "==================================================="
@@ -232,17 +245,19 @@ if [ "$CURL_RC" = "28" ]; then
     echo "         index_topk 를 줄이거나 더 작은 chat 모델을 쓰면 빨라짐."
 elif [ "$CURL_RC" != "0" ]; then
     bad "RAG 요청 실패 (curl exit=$CURL_RC)"
-elif echo "$RESP" | grep -q '"result"'; then
+elif answered "$RESP"; then
     ok "응답 수신 (${RAG_SECS}초)"
 fi
-if echo "$RESP" | grep -q '"result"'; then
-    RESULT=$(echo "$RESP" | sed -E 's/.*"result":"(([^"\\]|\\.)*)".*/\1/' | head -c 200)
+if answered "$RESP"; then
+    RESULT=$(answer_text "$RESP" | head -c 200)
     if [ -n "$RESULT" ]; then
         ok "답변 생성됨: ${RESULT:0:120}..."
     else
-        bad "result 가 비어 있음"
+        warn "답변 텍스트를 못 찾음 - 스키마가 다를 수 있음: $(echo "$RESP" | head -c 200)"
     fi
-    if echo "$RESP" | grep -q '"sources":\[\]'; then
+    if ! echo "$RESP" | grep -q '"sources"'; then
+        : # 2.3.0 응답에는 sources 필드가 없다 - 이 버전에선 판정 대상 아님
+    elif echo "$RESP" | grep -q '"sources":\[\]'; then
         warn "sources 가 비어 있음 - 검색이 0건이거나 메타데이터(source/page) 누락"
         # 출처 수집 패치는 실패해도 WARNING 으로만 남아 "오류 없음" 검사에 안 걸린다.
         # 검색이 왜 0건인지는 여기에 그대로 찍히므로 반드시 확인해야 함.
@@ -258,7 +273,7 @@ if echo "$RESP" | grep -q '"result"'; then
         ok "sources 채워짐 (출처 추적 동작)"
     fi
 else
-    bad "응답에 result 없음: $(echo "$RESP" | head -c 200)"
+    bad "응답이 처리되지 않음: $(echo "$RESP" | head -c 200)"
 fi
 
 # ---------------------------------------------------------------- L6
@@ -266,8 +281,8 @@ hdr "L6. 인텐트 분류 (Analyst 에러의 직접 원인 지점)"
 CLS=$(curl -s --max-time 120 -X POST "$BASE_URL/orchestrator" \
     -H "$AUTH" -H "Content-Type: application/json" \
     --data-binary "{\"prompt\":\"Classify this question: how many rows are in the table\",\"request_tag\":\"UserIntent\"$REQ_IDS}")
-LABEL=$(echo "$CLS" | sed -E 's/.*"result":"([^"]*)".*/\1/')
-if [ -n "$LABEL" ] && [ "$LABEL" != "$CLS" ]; then
+LABEL=$(answer_text "$CLS")
+if [ -n "$LABEL" ]; then
     ok "분류 라벨 반환: '$LABEL'"
     echo "         -> Analyst 가 이 라벨을 거부하면 'Error determining intent' 가 뜸."
     echo "            거부되면 .env 의 COPILOT_INTENT_LABELS 로 이름을 교정해야 함."
@@ -275,6 +290,8 @@ if [ -n "$LABEL" ] && [ "$LABEL" != "$CLS" ]; then
     case "$LABEL" in
         *" "*) bad "라벨에 공백 포함 - 자유형식 문장이 반환됨 (분류 실패)" ;;
     esac
+elif answered "$CLS"; then
+    warn "분류는 처리됐으나 라벨을 못 읽음: $(echo "$CLS" | head -c 200)"
 else
     bad "분류 응답 이상: $(echo "$CLS" | head -c 200)"
 fi
@@ -290,7 +307,7 @@ PNG1PX="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGA
 VIS=$(curl -s --max-time 180 -X POST "$BASE_URL/orchestrator" \
     -H "$AUTH" -H "Content-Type: application/json" \
     --data-binary "{\"prompt\":\"Describe this image.\",\"user_intent\":\"InterpretPageData\",\"image\":\"$PNG1PX\"$REQ_IDS}")
-if echo "$VIS" | grep -q '"result"'; then
+if answered "$VIS"; then
     ok "이미지 포함 요청이 오류 없이 처리됨 (vision 경로 살아 있음)"
 else
     bad "이미지 요청 실패: $(echo "$VIS" | head -c 200)"
