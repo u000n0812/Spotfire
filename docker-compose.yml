@@ -107,6 +107,9 @@ services:
       # 스크린샷 판독은 토큰을 많이 먹으므로 넉넉히 잡아야 함.
       CHAT_NUM_CTX: ${CHAT_NUM_CTX:-}
 
+      # 대화 스레드 엔드포인트 스텁 (실험용, 비우면 꺼짐)
+      COPILOT_THREAD_STUBS: ${COPILOT_THREAD_STUBS:-}
+
       # 인텐트 라벨 교정 (Analyst 가 라벨을 거부할 때만 사용, 비우면 내장 분류기 결과 사용)
       COPILOT_INTENT_LABELS: ${COPILOT_INTENT_LABELS:-}
       COPILOT_INTENT_DEFAULT: ${COPILOT_INTENT_DEFAULT:-}

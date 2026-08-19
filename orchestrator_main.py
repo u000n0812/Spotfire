@@ -473,6 +473,77 @@ async def register_client(
 @app.get("/agents/available")
 async def agents_available():
     return []
+
+
+# 대화 스레드 엔드포인트 스텁 (실험용, 기본 꺼짐).
+# 프론트엔드는 시작 시 POST /threads 로 대화 스레드를 만들려 하는데 이
+# orchestrator(2.0.0)에는 없어 404 가 남. 스레드 생성이 실패하면 프론트엔드가
+# 축소 모드로 동작하면서 화면 스크린샷 첨부를 건너뛰는 것일 수 있다 —
+# image 가 항상 비어 있는 현상의 남은 후보임.
+#
+# 응답 JSON 구조를 모르는 채로 만든 추정 스텁이라 기본은 꺼 둔다. 구조가 틀리면
+# 지금(404)보다 나쁜 파싱 오류가 날 수 있음. .env 에 COPILOT_THREAD_STUBS=true 를
+# 넣고 재기동하면 켜지고, 지우면 원래대로 돌아간다.
+if os.getenv("COPILOT_THREAD_STUBS", "").strip().lower() in ("1", "true", "yes"):
+    import uuid
+    from datetime import datetime, timezone
+
+    _threads = {}
+
+    def _new_thread(user_id=None, document_id=None, title=""):
+        _now = datetime.now(timezone.utc).isoformat()
+        _thread = {
+            "id": str(uuid.uuid4()),
+            "userId": user_id,
+            "documentId": document_id,
+            "title": title,
+            "messages": [],
+            "createdAt": _now,
+            "updatedAt": _now,
+        }
+        _threads[_thread["id"]] = _thread
+        return _thread
+
+    @app.post("/threads")
+    async def create_thread(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        thread = _new_thread(
+            body.get("userId") or body.get("user_id"),
+            body.get("documentId") or body.get("document_id"),
+            body.get("title") or "",
+        )
+        # 프론트엔드가 실제로 무엇을 보내는지가 구조를 맞추는 단서가 된다.
+        logger.info("Thread stub: created %s from keys %s", thread["id"], sorted(body))
+        return thread
+
+    @app.get("/threads/by-user-document/{user_id}/{document_id}")
+    async def get_thread_by_user_document(user_id: str, document_id: str):
+        for _t in _threads.values():
+            if _t.get("userId") == user_id and _t.get("documentId") == document_id:
+                return _t
+        return _new_thread(user_id, document_id)
+
+    @app.get("/threads/{thread_id}")
+    async def get_thread(thread_id: str):
+        return _threads.get(thread_id) or _new_thread()
+
+    @app.post("/threads/{thread_id}/messages")
+    async def add_thread_message(thread_id: str, request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        _threads.setdefault(thread_id, _new_thread())["messages"].append(body)
+        logger.info("Thread stub: message added to %s from keys %s", thread_id, sorted(body))
+        return body
+
+    logger.warning(
+        "Thread endpoint stubs are enabled (COPILOT_THREAD_STUBS). "
+        "Their response shape is a guess - unset the variable if the panel misbehaves."
+    )
 # --- END PATCH ---
 
 
