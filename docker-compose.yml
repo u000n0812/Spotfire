@@ -1,4 +1,31 @@
 services:
+  postgres:
+    # orchestrator 2.3.0 부터 대화 스레드(/threads)를 PostgreSQL 에 저장한다.
+    # 없으면 기동 시 alembic 마이그레이션이 실패하고 API 가 안 뜬다.
+    #
+    # 기동 로그가 "orchestrator-postgres" 와 "postgres" 두 호스트명을 찾으므로
+    # 네트워크 별칭을 둘 다 달아 어느 쪽으로 와도 연결되게 함.
+    image: postgres:16-alpine
+    container_name: copilot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-orchestrator}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      copilot-net:
+        aliases:
+          - postgres
+          - orchestrator-postgres
+    healthcheck:
+      # DB 가 접속 가능해진 뒤에 orchestrator 가 마이그레이션을 돌리도록
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   redis:
     # 벡터 검색(RediSearch 모듈)이 필요하므로 일반 redis 이미지가 아닌 redis-stack-server 사용
     image: redis/redis-stack-server:latest
@@ -60,7 +87,10 @@ services:
     container_name: copilot-orchestrator
     restart: unless-stopped
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     ports:
       - "8081:8080"
     extra_hosts:
@@ -126,6 +156,17 @@ services:
       COPILOT_USER_DOCS_INDEX: ${COPILOT_USER_DOCS_INDEX:-}
       COPILOT_SPOTFIRE_DOCS_INDEX: ${COPILOT_SPOTFIRE_DOCS_INDEX:-}
 
+      # PostgreSQL (2.3.0+ 의 대화 스레드 저장소)
+      # 실제 변수명은 이미지마다 다를 수 있음:
+      #   docker run --rm --entrypoint env public.ecr.aws/tds/llm-orchestrator:2.3.0
+      # 로 확인한 뒤 안 맞는 이름은 여기에 추가할 것.
+      POSTGRES_HOST: ${POSTGRES_HOST:-orchestrator-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-orchestrator}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@orchestrator-postgres:5432/orchestrator}
+
       # Ollama
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
 
@@ -148,3 +189,4 @@ networks:
 
 volumes:
   redis-data:
+  postgres-data:
