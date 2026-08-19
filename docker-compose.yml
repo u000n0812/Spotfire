@@ -148,6 +148,20 @@ services:
       CHAT_COMPLEX_MODEL_NAME: ${CHAT_COMPLEX_MODEL_NAME}
       EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME}
 
+      # 모델 카테고리 (2.3.0+). model 과 temperature 가 쌍으로 있어야 로드된다.
+      # 미설정 시 폴백이 llama3.2:3b 라 Ollama 404 가 나고, 없는 카테고리는
+      # fast 로 폴백되므로 vision 요청까지 함께 깨진다.
+      OLLAMA_FAST_MODEL: ${OLLAMA_FAST_MODEL:-}
+      OLLAMA_FAST_TEMPERATURE: ${OLLAMA_FAST_TEMPERATURE:-}
+      OLLAMA_LARGE_MODEL: ${OLLAMA_LARGE_MODEL:-}
+      OLLAMA_LARGE_TEMPERATURE: ${OLLAMA_LARGE_TEMPERATURE:-}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-}
+      OLLAMA_VISION_TEMPERATURE: ${OLLAMA_VISION_TEMPERATURE:-}
+      OLLAMA_CODE_MODEL: ${OLLAMA_CODE_MODEL:-}
+      OLLAMA_CODE_TEMPERATURE: ${OLLAMA_CODE_TEMPERATURE:-}
+      OLLAMA_REASONING_MODEL: ${OLLAMA_REASONING_MODEL:-}
+      OLLAMA_REASONING_TEMPERATURE: ${OLLAMA_REASONING_TEMPERATURE:-}
+
       # 모델 컨텍스트 크기. 지정하지 않으면 플러그인 기본값(8192)을 씀.
       # 스크린샷 판독은 토큰을 많이 먹으므로 넉넉히 잡아야 함.
       CHAT_NUM_CTX: ${CHAT_NUM_CTX:-}
