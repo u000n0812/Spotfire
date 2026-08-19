@@ -124,7 +124,11 @@ services:
       HASHED_ADMIN_PASSWORD: ${HASHED_ADMIN_PASSWORD}
       ACCESS_TOKEN_EXPIRE_DAYS: ${ACCESS_TOKEN_EXPIRE_DAYS}
 
-      # Spotfire 프론트엔드 client 자격증명 (/client/token 검증용)
+      # Spotfire 프론트엔드 client 자격증명
+      # 2.3.0 은 OAUTH2_* 를 쓰고, 없으면 임의 클라이언트를 자동 생성해 인증이 실패함
+      OAUTH2_CLIENT_ID: ${OAUTH2_CLIENT_ID:-}
+      OAUTH2_CLIENT_SECRET_HASH: ${OAUTH2_CLIENT_SECRET_HASH:-}
+      # 2.0.0 자체 패치(/client/token)용 - 되돌릴 때를 위해 유지
       COPILOT_CLIENT_ID: ${COPILOT_CLIENT_ID}
       COPILOT_CLIENT_SECRET: ${COPILOT_CLIENT_SECRET}
 
