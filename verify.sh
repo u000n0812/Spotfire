@@ -123,6 +123,18 @@ else
     fi
 fi
 
+# 모델이 GPU 에 올라가는지 확인한다. CPU 가 섞이면 화면 해석이 수 분 걸려
+# Analyst 쪽에서 "request took too long" 으로 끊긴다.
+PS_OUT=$(ollama ps 2>/dev/null | tail -n +2)
+if [ -n "$PS_OUT" ]; then
+    echo "  로드된 모델:"
+    echo "$PS_OUT" | sed 's/^/         /'
+    if echo "$PS_OUT" | grep -qi "cpu"; then
+        warn "일부 모델이 CPU 로 내려감 - VRAM 부족. num_ctx 를 낮춰 다시 만들 것:"
+        echo "         NUM_CTX=8192 bash ollama-bigctx.sh"
+    fi
+fi
+
 # ---------------------------------------------------------------- L3
 hdr "L3. 인증"
 TOKEN=$(curl -s --max-time 15 -X POST "$BASE_URL/client/token" \
@@ -315,11 +327,20 @@ case "$MM_MODEL" in
 esac
 # 1x1 PNG 를 실어 vision 경로가 살아 있는지만 확인 (내용 판독이 아니라 경로 검증)
 PNG1PX="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
-VIS=$(curl -s --max-time 180 -X POST "$BASE_URL/orchestrator" \
+# 화면 해석이 Analyst 에서 타임아웃으로 실패하는 일이 잦아, 얼마나 걸리는지 잰다.
+# 1x1 PNG 로도 느리면 모델/하드웨어 문제이고, 여기선 빠른데 Analyst 에서만
+# 느리면 실제 4K 스크린샷 크기가 원인이다.
+VIS_START=$(date +%s)
+VIS=$(curl -s --max-time 300 -X POST "$BASE_URL/orchestrator" \
     -H "$AUTH" -H "Content-Type: application/json" \
     --data-binary "{\"prompt\":\"Describe this image.\",\"user_intent\":\"InterpretPageData\",\"image\":\"$PNG1PX\"$REQ_IDS}")
+VIS_SECS=$(( $(date +%s) - VIS_START ))
 if answered "$VIS"; then
-    ok "이미지 포함 요청이 오류 없이 처리됨 (vision 경로 살아 있음)"
+    ok "이미지 포함 요청이 오류 없이 처리됨 (${VIS_SECS}초, vision 경로 살아 있음)"
+    if [ "$VIS_SECS" -gt 30 ]; then
+        warn "1x1 PNG 한 장에 ${VIS_SECS}초 - 실제 4K 스크린샷은 훨씬 오래 걸려 Analyst 가 타임아웃함"
+        echo "         ollama ps 로 GPU 로 도는지 확인하고, CPU 가 섞이면 num_ctx 를 낮출 것"
+    fi
 else
     bad "이미지 요청 실패: $(echo "$VIS" | head -c 200)"
 fi
