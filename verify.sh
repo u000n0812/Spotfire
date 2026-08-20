@@ -348,6 +348,30 @@ NUM_CTX=$(envval CHAT_NUM_CTX 8192)
 [ "${NUM_CTX:-8192}" -lt 16384 ] 2>/dev/null && \
     warn "CHAT_NUM_CTX=$NUM_CTX - 스크린샷은 토큰을 많이 먹음. 16384 권장"
 
+# 이미지 축소 패치(sitecustomize)가 실제로 로드됐는지.
+# 로드 안 되면 4K 스크린샷이 그대로 나가 Analyst 가 타임아웃한다.
+PATCH_LOG=$(docker logs copilot-orchestrator 2>&1 | grep "copilot-image-patch" | tail -5)
+if [ -z "$PATCH_LOG" ]; then
+    bad "이미지 패치가 로드되지 않음 - sitecustomize 가 임포트되지 않았음"
+    echo "         확인: docker exec copilot-orchestrator cat /opt/copilot-patch/sitecustomize.py | head -1"
+    echo "         확인: docker exec copilot-orchestrator printenv PYTHONPATH   (=/opt/copilot-patch 여야 함)"
+elif echo "$PATCH_LOG" | grep -q "NO HOOK INSTALLED"; then
+    bad "이미지 패치는 로드됐으나 후킹 실패 - requests/httpx 를 찾지 못함"
+    echo "$PATCH_LOG" | sed 's/^/         /'
+else
+    ok "이미지 패치 로드됨: $(echo "$PATCH_LOG" | grep -m1 "active:" | sed 's/.*active: //')"
+    SHRANK=$(docker logs copilot-orchestrator 2>&1 | grep -c "shrank image")
+    if [ "${SHRANK:-0}" -gt 0 ]; then
+        ok "  스크린샷 축소가 실제로 동작함 (${SHRANK}회)"
+        docker logs copilot-orchestrator 2>&1 | grep "shrank image" | tail -2 | sed 's/^/         /'
+    else
+        warn "  아직 축소된 이미지가 없음 - Analyst 에서 Explain Page 를 한 번 실행한 뒤 다시 확인"
+    fi
+    docker logs copilot-orchestrator 2>&1 | grep "image shrink failed" | tail -2 | sed 's/^/         /'
+fi
+VIS_MODE=$(envval COPILOT_VISION_MODE shrink)
+[ "$VIS_MODE" = "off" ] && warn "COPILOT_VISION_MODE=off - 스크린샷을 보내지 않고 메타데이터만으로 답함"
+
 # ---------------------------------------------------------------- 최근 오류
 hdr "최근 orchestrator 오류 로그"
 ERRS=$(docker logs --tail 300 copilot-orchestrator 2>&1 | grep -iE "error|exception|traceback|failed" | grep -viE "langsmith|LangSmith" | tail -10)
