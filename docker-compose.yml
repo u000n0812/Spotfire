@@ -173,6 +173,12 @@ services:
       # Pillow 가 없거나 디코딩 실패 시: keep=원본 전송, drop=이미지 제거
       COPILOT_IMAGE_ON_ERROR: ${COPILOT_IMAGE_ON_ERROR:-keep}
 
+      # 응답 시간 상한 (0/빈 값이면 건드리지 않음). 자세한 설명은 .env 참고.
+      COPILOT_NUM_PREDICT: ${COPILOT_NUM_PREDICT:-0}
+      COPILOT_NUM_CTX: ${COPILOT_NUM_CTX:-0}
+      COPILOT_KEEP_ALIVE: ${COPILOT_KEEP_ALIVE:-}
+      COPILOT_TEXT_MODEL: ${COPILOT_TEXT_MODEL:-}
+
       # 모델 카테고리 (2.3.0+). model 과 temperature 가 쌍으로 있어야 로드된다.
       # 미설정 시 폴백이 llama3.2:3b 라 Ollama 404 가 나고, 없는 카테고리는
       # fast 로 폴백되므로 vision 요청까지 함께 깨진다.

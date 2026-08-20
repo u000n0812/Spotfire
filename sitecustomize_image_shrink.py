@@ -1,38 +1,36 @@
-# orchestrator 컨테이너 전용: Ollama 로 나가는 요청에서 이미지를 줄이거나 뺀다.
+# orchestrator 컨테이너 전용: Ollama 로 나가는 요청을 CPU 환경에 맞게 손본다.
 #
-# 왜 필요한가:
-#   Spotfire 는 페이지 스크린샷을 원본 해상도(4K)로 보낸다. 비전 모델은 이미지를
-#   패치 단위 토큰으로 바꾸므로 4K 한 장이 4000~5000 토큰을 먹는다. 그래서
-#   컨텍스트를 키우면 CPU 전용 환경에서 처리 시간이 몇 분씩 걸려 Analyst 가
-#   "The request took too long to complete" 로 끊고, 컨텍스트를 줄이면
-#   "request (N tokens) exceeds the available context size" 로 거부당한다.
+# 무엇을 고치나:
+#   Analyst 의 "The request took too long to complete" 는 한 가지 원인이 아니다.
+#   요청 하나에 드는 시간은 세 덩어리로 나뉘고, 이 파일은 셋 다 건드린다.
 #
-# 어디에 끼어드는가 (중요):
-#   이전 판은 langchain 의 ChatOllama._convert_messages_to_ollama_messages 를
-#   후킹했는데, 이 이름은 langchain_community / langchain_ollama / 버전에 따라
-#   달라서 조용히 아무 일도 안 할 수 있다. 그래서 이번에는 훨씬 아래층 -
-#   실제로 HTTP 요청 본문(JSON)을 만드는 지점 - 을 감싼다:
-#     * requests.Session.request  (langchain_community 의 ChatOllama 경로)
-#     * httpx  BaseClient.build_request  (ollama 파이썬 클라이언트 경로)
-#   둘 다 json= 인자에 최종 payload 가 그대로 들어오므로, 그 안에서 이미지를
-#   찾아 바꾸면 어떤 라이브러리를 쓰든 무조건 걸린다.
+#     1) 프리필 - 입력 토큰을 읽는 시간.
+#        Spotfire 는 4K 스크린샷을 보내고, 비전 모델은 이걸 패치 토큰으로 바꿔
+#        한 장에 4000~5000 토큰을 쓴다. CPU 프리필은 초당 수십 토큰이라
+#        이것만으로 2~4분이 나간다.  -> 이미지를 줄이거나(shrink) 뺀다(off).
+#
+#     2) 모델 로드 - Ollama 가 가중치를 메모리에 올리는 시간.
+#        keep_alive 기본값은 5분이라, 잠깐 쉬면 다음 요청에서 7B 를 디스크에서
+#        다시 읽는다. CPU 장비에서 이게 10~60초다.  -> keep_alive 를 길게 박는다.
+#
+#     3) 생성 - 답을 뱉는 시간.
+#        CPU 에서 7B 는 초당 5~10 토큰. 모델이 800 토큰짜리 답을 쓰기로 마음먹으면
+#        그것만 2분이다.  -> num_predict 로 상한을 건다.
+#
+# 어디에 끼어드는가:
+#   벤더 코드나 langchain 사설 메서드가 아니라, 실제로 HTTP 본문(JSON)을 만드는
+#   지점을 감싼다:
+#     * requests.Session.request          (langchain_community 의 ChatOllama 경로)
+#     * httpx  BaseClient.build_request   (ollama 파이썬 클라이언트 경로)
+#   둘 다 json= 인자에 최종 payload 가 그대로 들어오므로, 어떤 라이브러리를 쓰든
+#   무조건 걸린다. 라이브러리 버전이 올라가도 깨지지 않는다.
 #
 # 어떻게 로드되는가:
 #   docker-compose 가 이 파일을 /opt/copilot-patch/sitecustomize.py 로 마운트하고
 #   PYTHONPATH=/opt/copilot-patch 를 준다. 파이썬은 기동 시 sys.path 어디에 있든
-#   sitecustomize 를 자동 임포트하므로, 이미지 안 venv 경로를 몰라도 된다.
-#   (이전 판은 /app/venv/lib/python3.12/site-packages 를 찍어서 마운트했는데,
-#    그 경로가 실제와 다르면 도커가 엉뚱한 자리에 파일만 만들고 끝난다.)
+#   sitecustomize 를 자동 임포트하므로 이미지 안 venv 경로를 몰라도 된다.
 #
-# 설정 (.env):
-#   COPILOT_VISION_MODE      shrink(기본) | off
-#                            off = 이미지를 아예 빼고 텍스트(시각화 메타데이터)만
-#                            보낸다. GPU 가 없어 비전 모델이 사실상 못 도는 환경에서
-#                            "느리게 실패" 대신 "빠르게 대답" 하도록 만드는 스위치.
-#   COPILOT_IMAGE_MAX_EDGE   축소 후 최대 변 픽셀 (기본 1280, 0 이면 축소 안 함)
-#   COPILOT_IMAGE_ON_ERROR   keep(기본) | drop
-#                            Pillow 가 없거나 디코딩에 실패했을 때의 처리.
-#                            keep = 원본을 그대로 보냄(=예전 동작), drop = 이미지 제거.
+# 설정은 전부 .env 에 있다 (COPILOT_* 참고).
 
 import base64
 import io
@@ -50,13 +48,25 @@ def _banner(msg):
     sys.stderr.flush()
 
 
+def _int_env(name, default):
+    try:
+        return int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
 MODE = os.environ.get("COPILOT_VISION_MODE", "shrink").strip().lower()
 ON_ERROR = os.environ.get("COPILOT_IMAGE_ON_ERROR", "keep").strip().lower()
+MAX_EDGE = _int_env("COPILOT_IMAGE_MAX_EDGE", 1280)
 
-try:
-    MAX_EDGE = int(os.environ.get("COPILOT_IMAGE_MAX_EDGE", "1280"))
-except ValueError:
-    MAX_EDGE = 1280
+# 생성 상한. 0 이면 건드리지 않는다.
+NUM_PREDICT = _int_env("COPILOT_NUM_PREDICT", 0)
+# 컨텍스트 크기. 0 이면 건드리지 않는다(모델에 박힌 값을 씀).
+NUM_CTX = _int_env("COPILOT_NUM_CTX", 0)
+# 모델을 메모리에 붙잡아 두는 시간. 빈 문자열이면 건드리지 않는다.
+KEEP_ALIVE = os.environ.get("COPILOT_KEEP_ALIVE", "").strip()
+# 이미지를 뺐을 때 갈아끼울 텍스트 모델. 비우면 그대로 둔다.
+TEXT_MODEL = os.environ.get("COPILOT_TEXT_MODEL", "").strip()
 
 _DROP = object()  # 이미지를 제거하라는 표시
 
@@ -66,7 +76,6 @@ _DROP = object()  # 이미지를 제거하라는 표시
 # --------------------------------------------------------------------------
 
 def _handle_failure(data, reason):
-    _LOG.warning("image shrink failed (%s) -> %s", reason, ON_ERROR)
     _banner("image shrink failed (%s) -> %s" % (reason, ON_ERROR))
     return _DROP if ON_ERROR == "drop" else data
 
@@ -121,8 +130,10 @@ def _shrink_b64_image(data):
 
 
 _NOTE = (
-    "\n\n[Note: the page screenshot was omitted because this deployment runs "
-    "without a GPU. Answer using the visualization metadata above.]"
+    "\n\n[Note: the page screenshot was omitted because this deployment has no GPU. "
+    "Describe the page from the visualization metadata given above - chart types, "
+    "axis columns, filters and markings. Do not claim to see the image, and do not "
+    "guess at values you were not given.]"
 )
 
 
@@ -130,11 +141,11 @@ _NOTE = (
 # 요청 본문 안을 훑으며 이미지를 찾아 바꾼다
 # --------------------------------------------------------------------------
 
-def _process_message_images(node):
+def _process_message_images(node, state):
     """Ollama 형식: {"images": [b64, ...]} 를 제자리에서 고친다."""
     images = node.get("images")
     if not isinstance(images, list) or not images:
-        return False
+        return
 
     kept = []
     dropped = 0
@@ -150,16 +161,17 @@ def _process_message_images(node):
     else:
         node.pop("images", None)
 
+    state["dropped"] += dropped
+    state["seen"] += len(images)
     if dropped and isinstance(node.get("content"), str):
         node["content"] = node["content"] + _NOTE
-    return True
 
 
-def _process_openai_content(node):
+def _process_openai_content(node, state):
     """OpenAI 형식: content 가 [{"type":"image_url","image_url":{"url":...}}] 인 경우."""
     content = node.get("content")
     if not isinstance(content, list):
-        return False
+        return
 
     changed = False
     kept = []
@@ -169,57 +181,114 @@ def _process_openai_content(node):
             continue
         url_holder = part.get("image_url")
         if part.get("type") == "image_url" and isinstance(url_holder, dict):
-            result = _shrink_b64_image(url_holder.get("url"))
             changed = True
+            state["seen"] += 1
+            result = _shrink_b64_image(url_holder.get("url"))
             if result is _DROP:
+                state["dropped"] += 1
                 continue
             url_holder["url"] = result
         kept.append(part)
 
     if changed:
         node["content"] = kept
-    return changed
 
 
-def _walk(node, depth=0):
-    """payload 를 재귀적으로 훑는다. 바뀐 게 있으면 True."""
+def _walk(node, state, depth=0):
     if depth > 12:
-        return False
-
-    changed = False
+        return
     if isinstance(node, dict):
-        if _process_message_images(node):
-            changed = True
-        if _process_openai_content(node):
-            changed = True
+        _process_message_images(node, state)
+        _process_openai_content(node, state)
         for value in list(node.values()):
-            if isinstance(value, (dict, list)) and _walk(value, depth + 1):
-                changed = True
+            if isinstance(value, (dict, list)):
+                _walk(value, state, depth + 1)
     elif isinstance(node, list):
         for value in node:
-            if isinstance(value, (dict, list)) and _walk(value, depth + 1):
-                changed = True
-    return changed
+            if isinstance(value, (dict, list)):
+                _walk(value, state, depth + 1)
+
+
+# --------------------------------------------------------------------------
+# 생성 옵션 조정
+# --------------------------------------------------------------------------
+
+def _is_ollama_call(payload):
+    """/api/chat, /api/generate 요청인지."""
+    return (
+        isinstance(payload, dict)
+        and isinstance(payload.get("model"), str)
+        and ("messages" in payload or "prompt" in payload)
+    )
+
+
+def _tune_payload(payload, state):
+    """CPU 에서 응답이 제시간에 끝나도록 옵션을 박는다.
+
+    벤더가 이미 정한 값은 존중하고, 비어 있는 것만 채운다.
+    """
+    notes = []
+
+    # 모델 로드 시간을 없앤다. 이게 없으면 5분만 쉬어도 다음 요청이 가중치를
+    # 디스크에서 다시 읽느라 수십 초를 버린다.
+    if KEEP_ALIVE and "keep_alive" not in payload:
+        payload["keep_alive"] = KEEP_ALIVE
+        notes.append("keep_alive=%s" % KEEP_ALIVE)
+
+    if NUM_PREDICT > 0 or NUM_CTX > 0:
+        options = payload.get("options")
+        if not isinstance(options, dict):
+            options = {}
+            payload["options"] = options
+        # 생성 길이 상한. CPU 에서 초당 5~10 토큰이라 이게 없으면 모델이
+        # 장문을 쓰기로 하는 순간 타임아웃이 확정된다.
+        if NUM_PREDICT > 0 and not options.get("num_predict"):
+            options["num_predict"] = NUM_PREDICT
+            notes.append("num_predict=%d" % NUM_PREDICT)
+        # 컨텍스트를 필요 이상으로 키우면 KV 캐시가 커져 느려진다.
+        if NUM_CTX > 0 and not options.get("num_ctx"):
+            options["num_ctx"] = NUM_CTX
+            notes.append("num_ctx=%d" % NUM_CTX)
+
+    # 이미지를 다 뺐으면 비전 모델을 쓸 이유가 없다. 텍스트 모델이 대개 더 빠르다.
+    if TEXT_MODEL and state["dropped"] and not any(
+        m.get("images") for m in payload.get("messages", []) if isinstance(m, dict)
+    ):
+        if payload.get("model") != TEXT_MODEL:
+            notes.append("model %s -> %s" % (payload.get("model"), TEXT_MODEL))
+            payload["model"] = TEXT_MODEL
+
+    return notes
 
 
 def _rewrite(payload, where):
     if not isinstance(payload, (dict, list)):
         return payload
+
+    state = {"seen": 0, "dropped": 0}
     try:
         before = len(_json.dumps(payload))
     except Exception:
         before = -1
+
     try:
-        if _walk(payload):
+        _walk(payload, state)
+        notes = _tune_payload(payload, state) if _is_ollama_call(payload) else []
+
+        if state["seen"] or notes:
             try:
                 after = len(_json.dumps(payload))
             except Exception:
                 after = -1
-            if before > 0 and after > 0:
-                _banner("%s payload %d KB -> %d KB" % (where, before // 1024, after // 1024))
+            parts = ["%s payload %d KB -> %d KB" % (where, max(before, 0) // 1024,
+                                                    max(after, 0) // 1024)]
+            if state["seen"]:
+                parts.append("images %d (dropped %d)" % (state["seen"], state["dropped"]))
+            parts.extend(notes)
+            _banner(" | ".join(parts))
     except Exception as exc:
         # 여기서 예외를 내면 요청 자체가 죽는다. 원본을 그대로 보낸다.
-        _LOG.warning("image pass skipped (%s: %s)", type(exc).__name__, exc)
+        _LOG.warning("payload pass skipped (%s: %s)", type(exc).__name__, exc)
     return payload
 
 
@@ -271,21 +340,32 @@ def _install():
                     % (patch.__name__, type(exc).__name__, exc))
 
     if not installed:
-        _banner("NO HOOK INSTALLED - images are being sent unchanged")
+        _banner("NO HOOK INSTALLED - requests are going out unchanged")
         return
 
-    if MODE == "off":
-        detail = "vision OFF (images stripped)"
-    else:
-        detail = "max edge %d px, on-error=%s" % (MAX_EDGE, ON_ERROR)
-    _banner("active: %s | hooks: %s" % (detail, ", ".join(installed)))
+    detail = ["vision=%s" % MODE]
+    if MODE != "off":
+        detail.append("max_edge=%d" % MAX_EDGE)
+        detail.append("on_error=%s" % ON_ERROR)
+    if NUM_PREDICT > 0:
+        detail.append("num_predict=%d" % NUM_PREDICT)
+    if NUM_CTX > 0:
+        detail.append("num_ctx=%d" % NUM_CTX)
+    if KEEP_ALIVE:
+        detail.append("keep_alive=%s" % KEEP_ALIVE)
+    if TEXT_MODEL:
+        detail.append("text_model=%s" % TEXT_MODEL)
+    _banner("active: %s | hooks: %s" % (", ".join(detail), ", ".join(installed)))
 
 
-if MODE == "off" or MAX_EDGE > 0:
+_ANY_WORK = MODE == "off" or MAX_EDGE > 0 or NUM_PREDICT > 0 or NUM_CTX > 0 \
+    or bool(KEEP_ALIVE) or bool(TEXT_MODEL)
+
+if _ANY_WORK:
     try:
         _install()
     except Exception as exc:
         # orchestrator 기동을 막지 않도록 조용히 넘어간다.
         _banner("not installed (%s: %s)" % (type(exc).__name__, exc))
 else:
-    _banner("disabled (COPILOT_VISION_MODE=%s, COPILOT_IMAGE_MAX_EDGE=%d)" % (MODE, MAX_EDGE))
+    _banner("disabled - nothing to do (COPILOT_* 가 전부 꺼져 있음)")

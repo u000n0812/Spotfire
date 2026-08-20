@@ -359,18 +359,31 @@ elif echo "$PATCH_LOG" | grep -q "NO HOOK INSTALLED"; then
     bad "이미지 패치는 로드됐으나 후킹 실패 - requests/httpx 를 찾지 못함"
     echo "$PATCH_LOG" | sed 's/^/         /'
 else
-    ok "이미지 패치 로드됨: $(echo "$PATCH_LOG" | grep -m1 "active:" | sed 's/.*active: //')"
-    SHRANK=$(docker logs copilot-orchestrator 2>&1 | grep -c "shrank image")
-    if [ "${SHRANK:-0}" -gt 0 ]; then
-        ok "  스크린샷 축소가 실제로 동작함 (${SHRANK}회)"
-        docker logs copilot-orchestrator 2>&1 | grep "shrank image" | tail -2 | sed 's/^/         /'
+    ok "이미지 패치 로드됨: $(docker logs copilot-orchestrator 2>&1 | grep -m1 "active:" | sed 's/.*active: //')"
+    HANDLED=$(docker logs copilot-orchestrator 2>&1 | grep -c "images [0-9]")
+    if [ "${HANDLED:-0}" -gt 0 ]; then
+        ok "  이미지가 실제로 처리됨 (${HANDLED}회)"
+        docker logs copilot-orchestrator 2>&1 | grep "images [0-9]" | tail -2 | sed 's/^/         /'
     else
-        warn "  아직 축소된 이미지가 없음 - Analyst 에서 Explain Page 를 한 번 실행한 뒤 다시 확인"
+        warn "  아직 처리된 이미지가 없음 - Analyst 에서 Explain Page 를 한 번 실행한 뒤 다시 확인"
     fi
     docker logs copilot-orchestrator 2>&1 | grep "image shrink failed" | tail -2 | sed 's/^/         /'
 fi
 VIS_MODE=$(envval COPILOT_VISION_MODE shrink)
-[ "$VIS_MODE" = "off" ] && warn "COPILOT_VISION_MODE=off - 스크린샷을 보내지 않고 메타데이터만으로 답함"
+[ "$VIS_MODE" = "off" ] && \
+    warn "COPILOT_VISION_MODE=off - 스크린샷을 보내지 않고 시각화 메타데이터만으로 답함 (GPU 없는 환경용)"
+
+# 모델이 메모리에 올라가 있는지. 내려가 있으면 다음 질문이 로딩부터 기다린다.
+if command -v ollama >/dev/null 2>&1; then
+    LOADED=$(ollama ps 2>/dev/null | tail -n +2 | grep -c .)
+    if [ "${LOADED:-0}" -eq 0 ]; then
+        warn "메모리에 올라온 모델 없음 - 다음 질문이 모델 로딩부터 기다림 (bash ollama-preload.sh)"
+    else
+        ollama ps 2>/dev/null | grep -qi "100% CPU" \
+            && warn "모델이 100% CPU 로 실행 중 - 화면(이미지) 판독은 사실상 불가. COPILOT_VISION_MODE=off 권장" \
+            || ok "모델이 메모리에 올라와 있음 (${LOADED}개)"
+    fi
+fi
 
 # ---------------------------------------------------------------- 최근 오류
 hdr "최근 orchestrator 오류 로그"
