@@ -72,6 +72,9 @@ TEXT_MODEL = os.environ.get("COPILOT_TEXT_MODEL", "").strip()
 MAX_PROMPT_TOKENS = _int_env("COPILOT_MAX_PROMPT_TOKENS", 0)
 # 유지할 대화 턴 수(system 제외). 0 이면 자르지 않는다.
 MAX_HISTORY = _int_env("COPILOT_MAX_HISTORY", 0)
+# SQL/JSON 생성 요청 전용 상한. 0 이면 위의 일반 값을 쓴다.
+SQL_NUM_PREDICT = _int_env("COPILOT_SQL_NUM_PREDICT", 0)
+SQL_MAX_PROMPT_TOKENS = _int_env("COPILOT_SQL_MAX_PROMPT_TOKENS", 0)
 # 나가는 요청을 파일로 떨궈 내용을 확인한다(비우면 안 함).
 DUMP_DIR = os.environ.get("COPILOT_DUMP_DIR", "").strip()
 # 이 토큰 수를 넘는 요청은 메시지별 크기를 로그에 풀어서 남긴다.
@@ -264,7 +267,40 @@ def _middle_truncate(text, keep):
     return text[:head] + marker + (text[-tail:] if tail else "")
 
 
-def _trim_payload(payload, notes):
+_STRUCTURED_MARKERS = (
+    "create table", "select ", "sql query", "sqlite", "```sql",
+    "valid json", "json schema", "respond with json", "output json",
+)
+
+
+def _is_structured_request(payload):
+    """SQL/JSON 처럼 형식이 정해진 출력을 요구하는 요청인가.
+
+    이런 요청은 일반 대화와 반대의 요구를 갖는다:
+      - 스키마를 자르면 없는 컬럼 이름으로 질의를 만들어 곧바로 실패한다.
+      - 출력을 중간에 끊으면 문법이 깨져 "유효한 질의를 만들지 못했다" 가 된다.
+    그래서 여기만 상한을 따로 둔다. 출력 상한(num_predict)은 상한일 뿐이라
+    넉넉히 줘도 모델이 짧게 답하면 시간이 더 들지 않는다. 반면 입력 상한은
+    프리필 시간에 직결되므로 무한정 올릴 수 없다.
+    """
+    try:
+        for msg in payload.get("messages", []) or []:
+            if not isinstance(msg, dict):
+                continue
+            text = _message_text(msg)[:6000].lower()
+            for marker in _STRUCTURED_MARKERS:
+                if marker in text:
+                    return True
+        prompt = payload.get("prompt")
+        if isinstance(prompt, str):
+            low = prompt[:6000].lower()
+            return any(marker in low for marker in _STRUCTURED_MARKERS)
+    except Exception:
+        pass
+    return False
+
+
+def _trim_payload(payload, notes, budget):
     """입력이 상한을 넘으면 대화 기록과 본문을 줄인다.
 
     데이터 질문 경로는 테이블 메타데이터(컬럼 목록·타입·샘플 값)를 프롬프트에
@@ -273,6 +309,7 @@ def _trim_payload(payload, notes):
       - 거부하지 않더라도 CPU 프리필이 몇 분 걸려 Analyst 가 끊는다.
     둘 다 사용자에게는 똑같이 실패로 보인다.
     """
+    MAX_PROMPT_TOKENS = budget
     if MAX_PROMPT_TOKENS <= 0:
         return
 
@@ -326,13 +363,17 @@ def _trim_payload(payload, notes):
         notes.append("prompt %d -> %d tok" % (before, after))
 
 
-def _dump(payload, state):
-    """나가는 요청을 파일로 떨군다. 무엇이 프롬프트를 부풀리는지 눈으로 보려는 용도."""
+def _dump(payload, kind):
+    """나가는 요청을 파일로 떨군다. 무엇이 프롬프트를 부풀리는지 눈으로 보려는 용도.
+
+    SQL/JSON 요청은 따로 저장한다. 한 번의 질문이 여러 번의 모델 호출을 만들어,
+    한 파일에 덮어쓰면 정작 보고 싶은 SQL 생성 요청이 뒤 호출에 지워진다.
+    """
     if not DUMP_DIR:
         return
     try:
         os.makedirs(DUMP_DIR, exist_ok=True)
-        path = os.path.join(DUMP_DIR, "last-payload.json")
+        path = os.path.join(DUMP_DIR, "last-%s-payload.json" % kind)
         with open(path, "w", encoding="utf-8") as fh:
             _json.dump(payload, fh, ensure_ascii=False, indent=1)
         _banner("dumped request to %s" % path)
@@ -370,8 +411,18 @@ def _tune_payload(payload, state):
     """
     notes = []
 
+    # SQL/JSON 생성 요청은 잘라내면 곧바로 깨지므로 상한을 따로 준다.
+    structured = _is_structured_request(payload)
+    if structured:
+        notes.append("structured")
+        budget = SQL_MAX_PROMPT_TOKENS or MAX_PROMPT_TOKENS
+        predict = SQL_NUM_PREDICT or NUM_PREDICT
+    else:
+        budget = MAX_PROMPT_TOKENS
+        predict = NUM_PREDICT
+
     # 입력이 크면 자른다. 옵션을 박기 전에 해야 아래 로그의 토큰 수가 최종값이 된다.
-    _trim_payload(payload, notes)
+    _trim_payload(payload, notes, budget)
 
     # 모델 로드 시간을 없앤다. 이게 없으면 5분만 쉬어도 다음 요청이 가중치를
     # 디스크에서 다시 읽느라 수십 초를 버린다.
@@ -379,16 +430,17 @@ def _tune_payload(payload, state):
         payload["keep_alive"] = KEEP_ALIVE
         notes.append("keep_alive=%s" % KEEP_ALIVE)
 
-    if NUM_PREDICT > 0 or NUM_CTX > 0:
+    if predict > 0 or NUM_CTX > 0:
         options = payload.get("options")
         if not isinstance(options, dict):
             options = {}
             payload["options"] = options
         # 생성 길이 상한. CPU 에서 초당 5~10 토큰이라 이게 없으면 모델이
         # 장문을 쓰기로 하는 순간 타임아웃이 확정된다.
-        if NUM_PREDICT > 0 and not options.get("num_predict"):
-            options["num_predict"] = NUM_PREDICT
-            notes.append("num_predict=%d" % NUM_PREDICT)
+        # 다만 SQL/JSON 은 중간에 끊기면 문법이 깨져 통째로 버려지므로 여유를 준다.
+        if predict > 0 and not options.get("num_predict"):
+            options["num_predict"] = predict
+            notes.append("num_predict=%d" % predict)
         # 컨텍스트를 필요 이상으로 키우면 KV 캐시가 커져 느려진다.
         if NUM_CTX > 0 and not options.get("num_ctx"):
             options["num_ctx"] = NUM_CTX
@@ -443,7 +495,7 @@ def _rewrite(payload, where):
             # 알아야 어디를 손볼지 정할 수 있다.
             if is_ollama and (DUMP_DIR or est > _DESCRIBE_OVER):
                 _describe(payload)
-                _dump(payload, state)
+                _dump(payload, "sql" if "structured" in notes else "chat")
     except Exception as exc:
         # 여기서 예외를 내면 요청 자체가 죽는다. 원본을 그대로 보낸다.
         _LOG.warning("payload pass skipped (%s: %s)", type(exc).__name__, exc)
@@ -517,13 +569,18 @@ def _install():
         detail.append("max_prompt=%d tok" % MAX_PROMPT_TOKENS)
     if MAX_HISTORY > 0:
         detail.append("max_history=%d" % MAX_HISTORY)
+    if SQL_NUM_PREDICT > 0 or SQL_MAX_PROMPT_TOKENS > 0:
+        detail.append("sql(predict=%d, prompt=%d)"
+                      % (SQL_NUM_PREDICT or NUM_PREDICT,
+                         SQL_MAX_PROMPT_TOKENS or MAX_PROMPT_TOKENS))
     if DUMP_DIR:
         detail.append("dump=%s" % DUMP_DIR)
     _banner("active: %s | hooks: %s" % (", ".join(detail), ", ".join(installed)))
 
 
 _ANY_WORK = MODE == "off" or MAX_EDGE > 0 or NUM_PREDICT > 0 or NUM_CTX > 0 \
-    or bool(KEEP_ALIVE) or bool(TEXT_MODEL) or MAX_PROMPT_TOKENS > 0 or bool(DUMP_DIR)
+    or bool(KEEP_ALIVE) or bool(TEXT_MODEL) or MAX_PROMPT_TOKENS > 0 \
+    or SQL_NUM_PREDICT > 0 or SQL_MAX_PROMPT_TOKENS > 0 or bool(DUMP_DIR)
 
 if _ANY_WORK:
     try:

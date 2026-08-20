@@ -183,6 +183,9 @@ services:
       # 수천~수만 토큰이 되므로 여기서 자른다.
       COPILOT_MAX_PROMPT_TOKENS: ${COPILOT_MAX_PROMPT_TOKENS:-0}
       COPILOT_MAX_HISTORY: ${COPILOT_MAX_HISTORY:-0}
+      # SQL/JSON 생성은 잘라내면 곧바로 깨지므로 상한을 따로 준다.
+      COPILOT_SQL_NUM_PREDICT: ${COPILOT_SQL_NUM_PREDICT:-0}
+      COPILOT_SQL_MAX_PROMPT_TOKENS: ${COPILOT_SQL_MAX_PROMPT_TOKENS:-0}
       # 이 토큰 수를 넘는 요청은 메시지별 크기를 로그에 남긴다.
       COPILOT_DESCRIBE_OVER: ${COPILOT_DESCRIBE_OVER:-1500}
       # 값을 주면 나가는 요청을 그 디렉터리에 떨군다.
