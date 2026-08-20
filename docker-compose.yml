@@ -179,6 +179,16 @@ services:
       COPILOT_KEEP_ALIVE: ${COPILOT_KEEP_ALIVE:-}
       COPILOT_TEXT_MODEL: ${COPILOT_TEXT_MODEL:-}
 
+      # 입력(프롬프트) 상한. 데이터 질문은 테이블 메타데이터를 통째로 실어 보내
+      # 수천~수만 토큰이 되므로 여기서 자른다.
+      COPILOT_MAX_PROMPT_TOKENS: ${COPILOT_MAX_PROMPT_TOKENS:-0}
+      COPILOT_MAX_HISTORY: ${COPILOT_MAX_HISTORY:-0}
+      # 이 토큰 수를 넘는 요청은 메시지별 크기를 로그에 남긴다.
+      COPILOT_DESCRIBE_OVER: ${COPILOT_DESCRIBE_OVER:-1500}
+      # 값을 주면 나가는 요청을 그 디렉터리에 떨군다.
+      # /opt/copilot-patch-libs 는 호스트의 ./copilot-patch-libs 라 바로 열어볼 수 있다.
+      COPILOT_DUMP_DIR: ${COPILOT_DUMP_DIR:-}
+
       # 모델 카테고리 (2.3.0+). model 과 temperature 가 쌍으로 있어야 로드된다.
       # 미설정 시 폴백이 llama3.2:3b 라 Ollama 404 가 나고, 없는 카테고리는
       # fast 로 폴백되므로 vision 요청까지 함께 깨진다.
