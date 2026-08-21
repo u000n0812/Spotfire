@@ -47,8 +47,17 @@ class RedisRetrieverPlugin:
             key_prefix=key_prefix_for(index_name),
         )
 
+        # 검색된 청크는 통째로 프롬프트에 실린다. 청크 하나가 보통 500~1000 토큰이라
+        # k=4 면 그것만 2000~4000 토큰이고, GPU 없는 장비에서는 이 프리필이
+        # 응답 시간의 대부분을 차지한다. COPILOT_SEARCH_TOP_K 로 줄일 수 있다.
+        top_k = os.environ.get("COPILOT_SEARCH_TOP_K", "").strip()
+        try:
+            k = int(top_k) if top_k else (search_top_k or 4)
+        except ValueError:
+            k = search_top_k or 4
+
         # 벡터 store 자체를 retriever 로 사용 (검색된 문서를 그대로 반환)
         return vector_db.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": search_top_k or 4},
+            search_kwargs={"k": max(1, k)},
         )

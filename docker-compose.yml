@@ -172,6 +172,10 @@ services:
       COPILOT_IMAGE_MAX_EDGE: ${COPILOT_IMAGE_MAX_EDGE:-1280}
       # Pillow 가 없거나 디코딩 실패 시: keep=원본 전송, drop=이미지 제거
       COPILOT_IMAGE_ON_ERROR: ${COPILOT_IMAGE_ON_ERROR:-keep}
+      # 전송/메모리만 줄이는 설정. 비전 토큰 수는 해상도로만 정해지므로 영향 없음.
+      COPILOT_IMAGE_FORMAT: ${COPILOT_IMAGE_FORMAT:-jpeg}
+      COPILOT_IMAGE_QUALITY: ${COPILOT_IMAGE_QUALITY:-70}
+      COPILOT_IMAGE_GRAY: ${COPILOT_IMAGE_GRAY:-0}
 
       # 응답 시간 상한 (0/빈 값이면 건드리지 않음). 자세한 설명은 .env 참고.
       COPILOT_NUM_PREDICT: ${COPILOT_NUM_PREDICT:-0}
@@ -191,6 +195,13 @@ services:
       # 값을 주면 나가는 요청을 그 디렉터리에 떨군다.
       # /opt/copilot-patch-libs 는 호스트의 ./copilot-patch-libs 라 바로 열어볼 수 있다.
       COPILOT_DUMP_DIR: ${COPILOT_DUMP_DIR:-}
+
+      # 검색 청크 수. 청크는 통째로 프롬프트에 실리므로 프리필 시간에 직결된다.
+      COPILOT_SEARCH_TOP_K: ${COPILOT_SEARCH_TOP_K:-}
+      # 모든 호출의 num_ctx 를 하나로 통일해 러너(=모델) 재적재를 없앤다.
+      COPILOT_FORCE_OPTIONS: ${COPILOT_FORCE_OPTIONS:-1}
+      # 추론 스레드 수. 0 이면 Ollama 기본값(물리 코어 수).
+      COPILOT_NUM_THREAD: ${COPILOT_NUM_THREAD:-0}
 
       # 모델 카테고리 (2.3.0+). model 과 temperature 가 쌍으로 있어야 로드된다.
       # 미설정 시 폴백이 llama3.2:3b 라 Ollama 404 가 나고, 없는 카테고리는

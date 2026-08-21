@@ -377,12 +377,32 @@ VIS_MODE=$(envval COPILOT_VISION_MODE shrink)
 if command -v ollama >/dev/null 2>&1; then
     LOADED=$(ollama ps 2>/dev/null | tail -n +2 | grep -c .)
     if [ "${LOADED:-0}" -eq 0 ]; then
-        warn "메모리에 올라온 모델 없음 - 다음 질문이 모델 로딩부터 기다림 (bash ollama-preload.sh)"
+        warn "메모리에 올라온 모델 없음 - 다음 질문이 모델 로딩부터 기다림 (bash ollama-setup.sh)"
     else
+        ok "모델이 메모리에 올라와 있음 (${LOADED}개)"
         ollama ps 2>/dev/null | grep -qi "100% CPU" \
-            && warn "모델이 100% CPU 로 실행 중 - 화면(이미지) 판독은 사실상 불가. COPILOT_VISION_MODE=off 권장" \
-            || ok "모델이 메모리에 올라와 있음 (${LOADED}개)"
+            && warn "  100% CPU 로 실행 중 - GPU 미사용. 해상도(COPILOT_IMAGE_MAX_EDGE)를 낮게 유지할 것"
     fi
+fi
+
+# 다섯 카테고리가 서로 다른 모델을 가리키면 질문 하나에 여러 러너가 뜬다.
+# CPU 장비에서는 그 재적재 시간이 추론보다 길다.
+CATS="FAST LARGE VISION CODE REASONING"
+CAT_MODELS=""
+for c in $CATS; do
+    v=$(envval "OLLAMA_${c}_MODEL" "")
+    [ -n "$v" ] && CAT_MODELS="$CAT_MODELS $v"
+done
+UNIQ=$(echo "$CAT_MODELS" | tr ' ' '\n' | grep -c . 2>/dev/null)
+DISTINCT=$(echo "$CAT_MODELS" | tr ' ' '\n' | grep . | sort -u | tr '\n' ' ')
+DISTINCT_N=$(echo "$DISTINCT" | tr ' ' '\n' | grep -c .)
+if [ "${UNIQ:-0}" -lt 5 ]; then
+    bad "모델 카테고리가 5개 미만으로 설정됨 - 빠진 카테고리는 벤더 폴백(llama3.2:3b)으로 가서 404"
+elif [ "${DISTINCT_N:-0}" -eq 1 ]; then
+    ok "다섯 카테고리가 모두 같은 모델: $DISTINCT (러너 교체 없음)"
+else
+    warn "카테고리가 서로 다른 모델을 가리킴: $DISTINCT"
+    echo "         질문 하나가 여러 번 호출되며 모델을 번갈아 올린다. 하나로 통일 권장 (bash ollama-setup.sh)"
 fi
 
 # ---------------------------------------------------------------- 최근 오류

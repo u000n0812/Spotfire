@@ -80,7 +80,28 @@ DUMP_DIR = os.environ.get("COPILOT_DUMP_DIR", "").strip()
 # 이 토큰 수를 넘는 요청은 메시지별 크기를 로그에 풀어서 남긴다.
 _DESCRIBE_OVER = _int_env("COPILOT_DESCRIBE_OVER", 1500)
 
+GRAYSCALE = os.environ.get("COPILOT_IMAGE_GRAY", "0").strip() in ("1", "true", "yes")
+IMAGE_FORMAT = os.environ.get("COPILOT_IMAGE_FORMAT", "jpeg").strip().lower()
+IMAGE_QUALITY = _int_env("COPILOT_IMAGE_QUALITY", 70)
+# 요청마다 실을 스레드 수. 0 이면 Ollama 기본값(물리 코어 수).
+NUM_THREAD = _int_env("COPILOT_NUM_THREAD", 0)
+# 이미 지정된 옵션도 덮어쓸지. num_ctx 가 호출마다 다르면 Ollama 가 러너를
+# 새로 띄우므로(=모델 재적재) 하나로 통일하는 편이 훨씬 빠르다.
+FORCE_OPTIONS = os.environ.get("COPILOT_FORCE_OPTIONS", "1").strip() in ("1", "true", "yes")
+
 _DROP = object()  # 이미지를 제거하라는 표시
+
+
+def _vision_tokens(width, height):
+    """Qwen2-VL 계열의 이미지 토큰 수 어림.
+
+    28x28 픽셀 블록 하나가 토큰 하나가 된다. 그래서 비용은 파일 크기가 아니라
+    해상도에만 비례한다 - JPEG 로 압축해도 토큰은 1개도 줄지 않는다.
+      3840x2160 -> 약 10500 토큰   (CPU 로는 감당 불가)
+      1024x576  -> 약 720 토큰
+      768x432   -> 약 400 토큰     (웬만한 텍스트 프롬프트보다 싸다)
+    """
+    return max(1, (width // 28) * (height // 28))
 
 
 # --------------------------------------------------------------------------
@@ -119,22 +140,36 @@ def _shrink_b64_image(data):
         img = Image.open(io.BytesIO(raw))
         width, height = img.size
         longest = max(width, height)
-        if longest <= MAX_EDGE:
+        if longest <= MAX_EDGE and not GRAYSCALE:
             return data
 
-        scale = MAX_EDGE / float(longest)
-        new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+        if longest > MAX_EDGE:
+            scale = MAX_EDGE / float(longest)
+            new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+        else:
+            new_size = (width, height)
+
         # 팔레트/알파 이미지가 섞여 들어와도 안전하게 저장되도록 RGB 로 맞춘다.
-        img = img.convert("RGB").resize(new_size, Image.LANCZOS)
+        img = img.convert("RGB")
+        if new_size != (width, height):
+            img = img.resize(new_size, Image.LANCZOS)
+        if GRAYSCALE:
+            # 흑백은 전송량만 줄이고 토큰 수는 그대로다. 차트 범례가 색으로만
+            # 구분되는 대시보드에서는 판독을 오히려 망치므로 기본은 꺼 둔다.
+            img = img.convert("L").convert("RGB")
 
         buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
+        if IMAGE_FORMAT == "jpeg":
+            img.save(buf, format="JPEG", quality=IMAGE_QUALITY, optimize=True)
+        else:
+            img.save(buf, format="PNG", optimize=True)
         shrunk = base64.b64encode(buf.getvalue()).decode("ascii")
 
         _banner(
-            "shrank image %dx%d -> %dx%d (%d KB -> %d KB)"
+            "shrank image %dx%d -> %dx%d (%d KB -> %d KB, ~%d vision tok)"
             % (width, height, new_size[0], new_size[1],
-               len(payload) // 1024, len(shrunk) // 1024)
+               len(payload) // 1024, len(shrunk) // 1024,
+               _vision_tokens(new_size[0], new_size[1]))
         )
         return prefix + shrunk
     except Exception as exc:
@@ -430,7 +465,7 @@ def _tune_payload(payload, state):
         payload["keep_alive"] = KEEP_ALIVE
         notes.append("keep_alive=%s" % KEEP_ALIVE)
 
-    if predict > 0 or NUM_CTX > 0:
+    if predict > 0 or NUM_CTX > 0 or NUM_THREAD > 0:
         options = payload.get("options")
         if not isinstance(options, dict):
             options = {}
@@ -441,10 +476,16 @@ def _tune_payload(payload, state):
         if predict > 0 and not options.get("num_predict"):
             options["num_predict"] = predict
             notes.append("num_predict=%d" % predict)
-        # 컨텍스트를 필요 이상으로 키우면 KV 캐시가 커져 느려진다.
-        if NUM_CTX > 0 and not options.get("num_ctx"):
+        # num_ctx 는 러너(모델 프로세스) 파라미터라, 호출마다 값이 다르면 Ollama 가
+        # 러너를 새로 띄운다 = 매번 모델 재적재. 벤더가 정한 값이 있어도 덮어써서
+        # 전부 같은 값으로 맞추는 편이 CPU 환경에서는 압도적으로 빠르다.
+        if NUM_CTX > 0 and (FORCE_OPTIONS or not options.get("num_ctx")):
+            if options.get("num_ctx") != NUM_CTX:
+                notes.append("num_ctx=%d" % NUM_CTX)
             options["num_ctx"] = NUM_CTX
-            notes.append("num_ctx=%d" % NUM_CTX)
+        if NUM_THREAD > 0 and not options.get("num_thread"):
+            options["num_thread"] = NUM_THREAD
+            notes.append("num_thread=%d" % NUM_THREAD)
 
     # 이미지를 다 뺐으면 비전 모델을 쓸 이유가 없다. 텍스트 모델이 대개 더 빠르다.
     if TEXT_MODEL and state["dropped"] and not any(
@@ -555,7 +596,8 @@ def _install():
 
     detail = ["vision=%s" % MODE]
     if MODE != "off":
-        detail.append("max_edge=%d" % MAX_EDGE)
+        detail.append("max_edge=%d(~%d tok)" % (MAX_EDGE, _vision_tokens(MAX_EDGE, MAX_EDGE * 9 // 16)))
+        detail.append(IMAGE_FORMAT + ("/gray" if GRAYSCALE else ""))
         detail.append("on_error=%s" % ON_ERROR)
     if NUM_PREDICT > 0:
         detail.append("num_predict=%d" % NUM_PREDICT)
