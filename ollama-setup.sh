@@ -29,10 +29,17 @@ EMBED="${EMBED:-bge-m3}"
 KEEP_ALIVE="${KEEP_ALIVE:-24h}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 
+# .env 가 code/reasoning 에 별도 모델(예: qwen2.5-coder:3b 실험)을 쓰고 있으면 같이 받는다.
+CODE_MODEL=""
+if [ -f .env ]; then
+    CODE_MODEL=$(grep -E '^OLLAMA_CODE_MODEL=' .env | head -1 | cut -d= -f2- | tr -d '\r')
+fi
+[ -n "$CODE_MODEL" ] && [ "$CODE_MODEL" != "$MODEL" ] && echo "code/reasoning 전용 모델 감지: $CODE_MODEL (같이 받음)"
+
 command -v ollama >/dev/null || { echo "ollama 명령을 찾을 수 없음"; exit 1; }
 
 echo "=== 1. 모델 받기 ==="
-for m in "$MODEL" "$EMBED"; do
+for m in "$MODEL" "$EMBED" $CODE_MODEL; do
     if ollama list | awk '{print $1}' | grep -qx "$m"; then
         echo "이미 있음: $m"
     else
@@ -45,7 +52,7 @@ echo
 echo "=== 2. 메모리에 올리기 ==="
 # keep_alive 는 첫 요청이 끝난 뒤부터 유지된다. 부팅 직후 첫 질문이 로딩을
 # 기다리지 않도록 여기서 미리 올려 둔다.
-for m in "$MODEL" "$EMBED"; do
+for m in "$MODEL" "$EMBED" $CODE_MODEL; do
     printf '%-20s ' "$m"
     start=$(date +%s)
     if [ "$m" = "$EMBED" ]; then
