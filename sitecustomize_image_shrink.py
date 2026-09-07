@@ -335,6 +335,36 @@ def _is_structured_request(payload):
     return False
 
 
+_SQL_EXTRA_RULE = (
+    "\n\n## Additional rule (missing from the rules above)\n"
+    "NEVER terminate the SQL statement with a semicolon (;). Spotfire SQL has no statement "
+    "terminator - a trailing ';' produces `unexpected char: ';'` and the whole query is "
+    "rejected. Double-check the very last character of your query before answering."
+)
+
+
+def _inject_sql_hint(payload):
+    """세미콜론 종결 금지 규칙을 SQL 관련 요청의 system 메시지에 덧붙인다.
+
+    실제로 관찰된 실패: 모델이 유효한 쿼리를 쓰고 마지막에 `;` 만 붙여서 매번
+    거부당했다("unexpected char: ';'"). 벤더의 12개 규칙 목록에는 이 규칙이 없어서
+    표준 SQL 학습 습관대로 계속 세미콜론을 붙인 것으로 보인다. 재시도 때 정확한
+    오류와 직전 쿼리를 다시 보여줘도(벤더 자체 재시도 루프), 작은 모델은 그 피드백을
+    "세미콜론을 빼라"는 구체적 행동으로 못 옮기고 같은 쿼리를 그대로 반복했다.
+    벤더 프롬프트 파일은 이미지 안에 있어 직접 못 고치므로, 여기서 요청이 나가기
+    직전에 규칙 한 줄을 얹는다 - 몇십 토큰이라 비용은 무시할 만하다.
+    """
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return False
+    for msg in reversed(messages):
+        if isinstance(msg, dict) and msg.get("role") == "system" and isinstance(msg.get("content"), str):
+            if _SQL_EXTRA_RULE not in msg["content"]:
+                msg["content"] = msg["content"] + _SQL_EXTRA_RULE
+            return True
+    return False
+
+
 def _trim_payload(payload, notes, budget):
     """입력이 상한을 넘으면 대화 기록과 본문을 줄인다.
 
@@ -452,6 +482,8 @@ def _tune_payload(payload, state):
         notes.append("structured")
         budget = SQL_MAX_PROMPT_TOKENS or MAX_PROMPT_TOKENS
         predict = SQL_NUM_PREDICT or NUM_PREDICT
+        if _inject_sql_hint(payload):
+            notes.append("+no-semicolon rule")
     else:
         budget = MAX_PROMPT_TOKENS
         predict = NUM_PREDICT

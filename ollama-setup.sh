@@ -29,12 +29,13 @@ EMBED="${EMBED:-bge-m3}"
 KEEP_ALIVE="${KEEP_ALIVE:-24h}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 
-# .env 가 code/reasoning 에 별도 모델(예: qwen2.5-coder:3b 실험)을 쓰고 있으면 같이 받는다.
+# .env 의 large 카테고리가 다른 모델(예: qwen2.5-coder:3b 실험)을 쓰고 있으면 같이 받는다.
+# SQL 생성·재시도(Specific_Data_Question)는 large 카테고리로 간다 - 실제 요청 로그로 확인함.
 CODE_MODEL=""
 if [ -f .env ]; then
-    CODE_MODEL=$(grep -E '^OLLAMA_CODE_MODEL=' .env | head -1 | cut -d= -f2- | tr -d '\r')
+    CODE_MODEL=$(grep -E '^OLLAMA_LARGE_MODEL=' .env | head -1 | cut -d= -f2- | tr -d '\r')
 fi
-[ -n "$CODE_MODEL" ] && [ "$CODE_MODEL" != "$MODEL" ] && echo "code/reasoning 전용 모델 감지: $CODE_MODEL (같이 받음)"
+[ -n "$CODE_MODEL" ] && [ "$CODE_MODEL" != "$MODEL" ] && echo "large 전용 모델 감지: $CODE_MODEL (같이 받음)"
 
 command -v ollama >/dev/null || { echo "ollama 명령을 찾을 수 없음"; exit 1; }
 
@@ -97,6 +98,9 @@ cat <<EOF
   OLLAMA_VISION_MODEL=$MODEL
   OLLAMA_CODE_MODEL=$MODEL
   OLLAMA_REASONING_MODEL=$MODEL
+
+(SQL 생성 품질 검증 중이면 OLLAMA_LARGE_MODEL 만 별도 모델로 둬도 된다 -
+ Specific_Data_Question 의 SQL 생성·재시도가 이 카테고리로 감)
 
 이후: docker compose up -d
 EOF
